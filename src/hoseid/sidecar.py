@@ -16,9 +16,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# v1 sidecars are image-only and remain valid: the landing zone is immutable, so anything already
+# written can never be migrated in place. Readers must keep understanding older versions forever.
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 
 class MediaType(str, Enum):
@@ -110,6 +114,14 @@ class Sidecar(BaseModel):
     height: int | None = None
     bytes: int
 
+    # --- video only (schema_version >= 2) ---
+    # Required when media_type == "video", absent for images. A clip is ONE capture: one asset,
+    # one sidecar, one landing-zone row. Sampled frames are internal to analysis and never
+    # become captures -- that would explode the capture count and make clip identity implicit.
+    duration_s: float | None = None
+    fps: float | None = None
+    frame_count: int | None = None
+
     conditions: Conditions = Field(default_factory=Conditions)
     trigger_type: TriggerType = TriggerType.unknown
     burst_index: int | None = None
@@ -133,6 +145,29 @@ class Sidecar(BaseModel):
         if not v:
             raise ValueError("station must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def _video_fields_required_for_video(self) -> "Sidecar":
+        """Video captures must carry duration/fps/frame_count; images must not.
+
+        Enforced rather than merely documented because the analysis stage needs duration to
+        compute its sampling cadence, and a clip that silently reaches stage 1 without it would
+        be sampled at the wrong density with no error.
+        """
+        is_video = MediaType(self.media_type) is MediaType.video
+        missing = [f for f in ("duration_s", "fps", "frame_count") if getattr(self, f) is None]
+        if is_video and missing:
+            raise ValueError(f"media_type=video requires {missing}")
+        if not is_video and len(missing) < 3:
+            present = [f for f in ("duration_s", "fps", "frame_count") if getattr(self, f) is not None]
+            raise ValueError(f"media_type={self.media_type} must not carry video fields {present}")
+        if is_video and self.duration_s is not None and self.duration_s <= 0:
+            raise ValueError("duration_s must be > 0")
+        return self
+
+    @property
+    def is_video(self) -> bool:
+        return MediaType(self.media_type) is MediaType.video
 
     @property
     def digest(self) -> str:
@@ -166,10 +201,13 @@ def validate_sidecar(data: dict[str, Any] | str | Path) -> Sidecar:
         sc = Sidecar.model_validate(data)
     except Exception as e:
         raise SidecarError(str(e)) from e
-    if sc.schema_version != SCHEMA_VERSION:
+    if sc.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise SidecarError(
-            f"schema_version {sc.schema_version} != supported {SCHEMA_VERSION}"
+            f"schema_version {sc.schema_version} not in supported "
+            f"{sorted(SUPPORTED_SCHEMA_VERSIONS)}"
         )
+    if sc.schema_version < 2 and sc.is_video:
+        raise SidecarError("schema_version 1 has no video support; video requires >= 2")
     return sc
 
 

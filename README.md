@@ -8,12 +8,16 @@ Sage integration are all downstream of this layer.
 ## Pipeline
 
 ```
-SD card / (future) Reveal + Arlo fetch
+SD card / (future) Reveal + Arlo fetch      stills AND video clips
         │
         ▼
   landing zone            append-only, immutable, content-addressed
+        │                 a clip is ONE capture, not N frames
         │
         ├─ stage 1: MegaDetector v1000 redwood, CPU, threshold 0.2
+        │            images: detect directly
+        │            video:  sample 2 fps (≤40 frames), detect across all,
+        │                    keep the single best frame by conf × bbox_area
         │            → boxes + crops + capture rollup (including empty captures)
         │
         └─ stage 2: SpeciesNet 5.0.5, MPS, USA/CA geofence, ON CROPS
@@ -44,6 +48,22 @@ hoseid score <run-id>                          # pipeline vs P's tags
 ```
 
 `HOSEID_ROOT` overrides the data root (used by the eval runs and the tests).
+
+### Video
+
+Video ingests through the same path — `ingest-sd` accepts `.mp4/.avi/.mov/.mkv/.m4v` alongside
+stills and probes duration/fps/frame_count via ffprobe. Decoding uses system ffmpeg rather than
+PyAV or opencv, so the core package stays dependency-free for both ML venvs.
+
+**Video counts are lower bounds, not censuses** (invariant 7). One frame is kept per clip, so an
+animal visible only at another moment produces no detection. `captures.count_is_lower_bound`
+carries this on every row; use the `captures_census` view or `review.group_size_stats()` for
+anything that assumes complete counts.
+
+Sampling is 2 fps capped at 40 frames per clip. When the cap binds, the 40 frames are spread
+evenly across the *whole* clip rather than truncating at 20 s — otherwise an animal appearing
+late in a long clip would never be sampled. The policy is recorded per run in `runs.sampling_policy`
+so a re-run at different density is comparable rather than silently different.
 
 ## Layout
 

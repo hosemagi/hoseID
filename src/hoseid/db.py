@@ -27,9 +27,25 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _apply(conn: sqlite3.Connection, sql_file: Path) -> None:
-    conn.executescript(sql_file.read_text())
-    conn.commit()
+def migrate(conn: sqlite3.Connection, which: str) -> int:
+    """Apply pending migrations in filename order, tracked by PRAGMA user_version.
+
+    A user_version counter rather than CREATE-IF-NOT-EXISTS, because migrations now include
+    ALTER TABLE, which is not idempotent -- re-running it raises "duplicate column name". The
+    counter is the number of migration files applied, so each file runs exactly once.
+    """
+    d = MIGRATIONS / which
+    files = sorted(d.glob("*.sql"))
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    applied = 0
+    for i, f in enumerate(files, start=1):
+        if i <= current:
+            continue
+        conn.executescript(f.read_text())
+        conn.execute(f"PRAGMA user_version = {i}")
+        conn.commit()
+        applied += 1
+    return applied
 
 
 @contextmanager
@@ -38,7 +54,7 @@ def detections(create: bool = True):
     conn = _connect(p)
     try:
         if create:
-            _apply(conn, MIGRATIONS / "001_detections.sql")
+            migrate(conn, "detections")
         yield conn
     finally:
         conn.close()
@@ -50,7 +66,7 @@ def tags(create: bool = True):
     conn = _connect(p)
     try:
         if create:
-            _apply(conn, MIGRATIONS / "tags_001.sql")
+            migrate(conn, "tags")
         yield conn
     finally:
         conn.close()
@@ -61,16 +77,17 @@ def start_run(conn: sqlite3.Connection, *, run_id: str, started_at: str,
               detector_threshold: float,
               classifier_model: str | None = None, classifier_version: str | None = None,
               geofence_country: str | None = None, geofence_admin1: str | None = None,
-              taxon_map_version: str | None = None, notes: str | None = None) -> None:
+              taxon_map_version: str | None = None, notes: str | None = None,
+              sampling_policy: str | None = None) -> None:
     conn.execute(
         """INSERT OR REPLACE INTO runs
            (run_id, started_at, detector_model, detector_version, classifier_model,
             classifier_version, geofence_country, geofence_admin1, detector_threshold,
-            taxon_map_version, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            taxon_map_version, notes, sampling_policy)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (run_id, started_at, detector_model, detector_version, classifier_model,
          classifier_version, geofence_country, geofence_admin1, detector_threshold,
-         taxon_map_version, notes))
+         taxon_map_version, notes, sampling_policy))
     conn.commit()
 
 

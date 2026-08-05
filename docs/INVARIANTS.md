@@ -85,6 +85,30 @@ reads only the landing zone and is idempotent per `run_id` (`db.already_processe
 pipeline stages are separate processes in separate venvs — required anyway, since speciesnet and
 megadetector have an unresolvable protobuf conflict.
 
+### 7. Counts from video captures are lower bounds, not censuses
+
+One frame is selected per clip, so an animal that only becomes visible at another moment in the
+clip produces no detection. Nothing downstream may treat a video-derived count as a complete
+count of animals present. This is the same rule as invariant 5: **absence is not evidence of
+absence.**
+
+This is the one real cost of dropping tracking, and it is accepted deliberately rather than
+discovered later. The specific failure to prevent is something like Sage computing average group
+size across mixed image and video captures and producing a number that is neither a group size
+nor a detection rate.
+
+*Enforced:* `captures.count_is_lower_bound` is set to 1 for every video capture by
+`stages/detect.py` — stored as a column rather than derived from `media_type` at query time, so
+the constraint travels with the row and any reader sees it without knowing the rule. The
+`captures_census` view excludes lower-bound rows, and `review.group_size_stats` reads that view
+by default, reporting `excluded_lower_bound_captures` rather than hiding the omission.
+`include_lower_bounds=True` remains available for callers that genuinely want a detection rate,
+and the returned dict is labelled so the distinction survives into whatever consumes it.
+
+*Tests:* `test_video_captures_are_flagged_as_lower_bounds`, `test_census_view_excludes_video`,
+`test_group_size_stats_excludes_video_by_default`,
+`test_including_lower_bounds_is_possible_but_labelled`.
+
 ---
 
 ## Two non-negotiable operational facts
@@ -93,6 +117,19 @@ megadetector have an unresolvable protobuf conflict.
 29.2% on full frames. It is an `always_crop` model and fails *silently and confidently* on a full
 frame, returning `blank` at ~0.99. Guarded by `classify._assert_is_crop`; tested in
 `tests/test_crop_guard.py`.
+
+**A clip is one capture.** One asset, one sidecar, one `captures` row. Sampled frames are internal
+to stage 1 and never become captures — that would explode the capture count and make clip identity
+implicit rather than explicit. Sampled frames are also temporary: only the selected frame's crop
+persists, addressed by `detection_id` exactly as image crops are.
+
+**Frame selection is detector-driven, never motion-driven.** Stage 1 runs MegaDetector across
+every sampled frame and keeps the best by `confidence × bbox_area`. Motion is a proxy for "an
+animal is here"; the detector is the direct measure and is cheap enough to run on everything.
+Motion is actively worse here: wind moves branches, so it selects for exactly the false triggers
+this pipeline exists to drop, and the highest-motion frame is frequently the most motion-blurred —
+the worst frame to identify from. There is deliberately **no tracking**; do not reintroduce it
+without a new decision.
 
 **The geofence must be applied explicitly.** SpeciesNet's `components="classifier"` mode ignores
 `country`/`admin1_region` entirely — verified: identical output for no-geofence, USA, USA/CA and

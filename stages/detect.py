@@ -27,7 +27,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from hoseid import db, landing, paths, stations  # noqa: E402
+from hoseid import db, landing, paths, stations, video  # noqa: E402
 from hoseid.sidecar import validate_sidecar  # noqa: E402
 
 DETECTOR_MODEL = "megadetector-v1000-redwood"
@@ -55,7 +55,11 @@ def main() -> int:
     ap.add_argument("--crop-padding", type=float, default=0.15)
     ap.add_argument("--reprocess", action="store_true",
                     help="redo assets already recorded for this run_id")
+    ap.add_argument("--sample-fps", type=float, default=video.DEFAULT_POLICY.nominal_fps)
+    ap.add_argument("--max-sampled-frames", type=int, default=video.DEFAULT_POLICY.max_frames)
     args = ap.parse_args()
+
+    policy = video.SamplingPolicy(nominal_fps=args.sample_fps, max_frames=args.max_sampled_frames)
 
     from megadetector.detection.run_detector import load_detector
     from megadetector.visualization.visualization_utils import load_image
@@ -72,6 +76,7 @@ def main() -> int:
         db.start_run(conn, run_id=args.run_id, started_at=started,
                      detector_model=DETECTOR_MODEL, detector_version=DETECTOR_VERSION,
                      detector_threshold=args.threshold,
+                     sampling_policy=json.dumps(policy.as_provenance()),
                      notes=f"device={args.device}")
 
         sidecar_files = landing.iter_sidecars()
@@ -92,18 +97,23 @@ def main() -> int:
                 sc.station, sc.device_id, sc.capture_time, overrides)
 
             t0 = time.time()
+            frame_offset_s = frame_index = None
+            n_sampled = None
             try:
-                img = load_image(str(asset))
-                res = det.generate_detections_one_image(img, image_id=sc.asset_id)
+                if sc.is_video:
+                    boxes, pil, frame_offset_s, frame_index, n_sampled = _detect_video(
+                        det, load_image, Image, asset, sc, policy, args.threshold)
+                else:
+                    img = load_image(str(asset))
+                    res = det.generate_detections_one_image(img, image_id=sc.asset_id)
+                    boxes = [d for d in (res.get("detections") or [])
+                             if d.get("conf", 0) >= args.threshold]
+                    pil = Image.open(asset).convert("RGB")
             except Exception as e:
                 print(f"  DETECT FAILED {sc.asset_id}: {type(e).__name__}: {e}", file=sys.stderr)
                 continue
             elapsed_ms = (time.time() - t0) * 1000.0
 
-            boxes = [d for d in (res.get("detections") or [])
-                     if d.get("conf", 0) >= args.threshold]
-
-            pil = Image.open(asset).convert("RGB")
             W, H = pil.size
             rows = []
             for d in boxes:
@@ -115,13 +125,13 @@ def main() -> int:
                     crop_rel = _write_crop(pil, (x, y, w, h), W, H, detection_id,
                                            sc.capture_time, args.crop_padding)
                 rows.append((detection_id, sc.asset_id, args.run_id, x, y, w, h,
-                             cls, float(d["conf"]), crop_rel))
+                             cls, float(d["conf"]), crop_rel, frame_offset_s, frame_index))
 
             conn.executemany(
                 """INSERT OR REPLACE INTO detections
                    (detection_id, asset_id, run_id, bbox_x, bbox_y, bbox_w, bbox_h,
-                    detector_class, detector_confidence, crop_path)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""", rows)
+                    detector_class, detector_confidence, crop_path, frame_offset_s, frame_index)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", rows)
 
             classes = {r[7] for r in rows}
             is_empty = 1 if not rows else 0
@@ -129,12 +139,17 @@ def main() -> int:
             conn.execute(
                 """INSERT OR REPLACE INTO captures
                    (asset_id, run_id, station, station_corrected, capture_time, time_trusted,
-                    n_detections, has_animal, has_human, has_vehicle, is_empty, detector_ms)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    n_detections, has_animal, has_human, has_vehicle, is_empty, detector_ms,
+                    media_type, count_is_lower_bound, sampled_frames)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (sc.asset_id, args.run_id, station, int(corrected),
                  sc.capture_time.isoformat(), int(sc.time_is_trustworthy),
                  len(rows), int("animal" in classes), int("person" in classes),
-                 int("vehicle" in classes), is_empty, elapsed_ms))
+                 int("vehicle" in classes), is_empty, elapsed_ms,
+                 sc.media_type,
+                 # Invariant 7: only one frame per clip is kept, so a video count can only ever
+                 # be a lower bound on the animals actually present.
+                 int(sc.is_video), n_sampled))
             conn.commit()
 
             n_cap += 1
@@ -148,6 +163,39 @@ def main() -> int:
                       "detections": n_det, "empty_captures": n_empty,
                       "device": args.device, "threshold": args.threshold}, indent=1))
     return 0
+
+
+def _detect_video(det, load_image, Image, asset, sc, policy, threshold):
+    """Detect across sampled frames, keep the single best frame, emit detections from it only.
+
+    Deliberately no tracking. An earlier design associated boxes into tracks across frames to get
+    one detection per animal per clip plus heading from centroid drift; it was rejected as
+    overengineered. P reviews clips by hand and the clip itself is in the landing zone, so the
+    selected frame is not a summary anyone is stuck with -- it is a thumbnail with a timestamp
+    pointing into the real artifact. Do not reintroduce tracking without a new decision.
+
+    Returns (boxes, pil_of_selected_frame, offset_s, frame_index, n_sampled).
+    """
+    meta = video.VideoMeta(duration_s=sc.duration_s, fps=sc.fps,
+                           frame_count=sc.frame_count, width=sc.width, height=sc.height)
+    best = None          # (score, boxes, frame)
+    n_sampled = 0
+    with video.FrameSampler(asset, policy, meta=meta) as frames:
+        n_sampled = len(frames)
+        for f in frames:
+            res = det.generate_detections_one_image(
+                load_image(str(f.path)), image_id=f"{sc.asset_id}#{f.frame_index}")
+            dets = [d for d in (res.get("detections") or []) if d.get("conf", 0) >= threshold]
+            score = video.score_frame(dets)
+            if best is None or score > best[0]:
+                # Hold the decoded pixels now: the temp dir is cleaned up on context exit.
+                best = (score, dets, Image.open(f.path).convert("RGB"), f)
+        if best is None:
+            # No frames decoded at all -- treat as an empty capture rather than an error, so a
+            # zero-length or unreadable clip is still recorded and visible in station stats.
+            return [], Image.new("RGB", (1, 1)), None, None, n_sampled
+        _, boxes, pil, frame = best
+        return boxes, pil, frame.offset_s, frame.frame_index, n_sampled
 
 
 def _write_crop(pil, bbox, W, H, detection_id, capture_time, pad_frac) -> str:

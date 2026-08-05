@@ -14,14 +14,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import landing, paths
+from . import landing, paths, video
 from .sidecar import (
     CaptureTimeSource, Conditions, MediaType, ResolutionClass, Sidecar, StationSource,
     TriggerType, compute_asset_id,
 )
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
-VIDEO_SUFFIXES = {".mp4", ".avi", ".mov"}
+VIDEO_SUFFIXES = video.VIDEO_SUFFIXES
 
 
 @dataclass
@@ -109,6 +109,13 @@ def ingest_directory(src_dir: Path, station: str, *, vendor: str = "unknown",
             w, h = _dimensions(p) if media is MediaType.image else (None, None)
             bi, bt = _burst(p)
 
+            vmeta = None
+            if media is MediaType.video:
+                # Probe rather than guess: stage 1 needs duration to compute sampling cadence,
+                # and the sidecar validator refuses a video without it.
+                vmeta = video.probe(p)
+                w, h = vmeta.width, vmeta.height
+
             sc = Sidecar(
                 asset_id=asset_id,
                 media_type=media,
@@ -129,6 +136,9 @@ def ingest_directory(src_dir: Path, station: str, *, vendor: str = "unknown",
                 conditions=Conditions(),
                 trigger_type=TriggerType.unknown,
                 burst_index=bi, burst_total=bt,
+                duration_s=vmeta.duration_s if vmeta else None,
+                fps=vmeta.fps if vmeta else None,
+                frame_count=vmeta.frame_count if vmeta else None,
                 raw_vendor_payload={"source_filename": p.name,
                                     "source_relpath": str(p.relative_to(src_dir))},
             )
