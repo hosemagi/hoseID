@@ -148,9 +148,20 @@ def queue(run_id: str, limit: int) -> None:
 @cli.command()
 @click.argument("run_id")
 def stats(run_id: str) -> None:
-    """Per-station activity, including empty-capture rate."""
+    """Per-station activity, empty-capture rate, and decode failures."""
+    failures = review.decode_failures(run_id)
     click.echo(json.dumps({"stations": review.station_activity(run_id),
-                           "taxa": review.taxon_summary(run_id)}, indent=1))
+                           "taxa": review.taxon_summary(run_id),
+                           "decode_failures": len(failures),
+                           "group_size": review.group_size_stats(run_id)}, indent=1))
+    if failures:
+        # Loud on purpose. These are clips the pipeline could not look at, and they are
+        # deliberately absent from the empty-capture count.
+        click.echo(f"\n!! {len(failures)} capture(s) could not be decoded "
+                   f"-- these are NOT empty captures:", err=True)
+        for f in failures[:10]:
+            click.echo(f"   {f['station']:14s} {f['capture_time']}  "
+                       f"{f['asset_id'][:20]}  {f['decode_error']}", err=True)
 
 
 # --- tags ---------------------------------------------------------------------

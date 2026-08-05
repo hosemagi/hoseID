@@ -92,8 +92,8 @@ def store_asset(src: Path, sidecar: Sidecar, *, allow_existing: bool = True) -> 
         # A difference in anything that describes the *capture* -- station, capture_time,
         # resolution_class, device -- is a genuine conflict. Resolving it by overwrite would
         # destroy the earlier record, so refuse and let a human decide.
-        prior = json.loads(sp.read_text())
-        incoming = json.loads(sidecar.to_json())
+        prior = _normalise(json.loads(sp.read_text()))
+        incoming = _normalise(json.loads(sidecar.to_json()))
         differing = _semantic_diff(prior, incoming)
         if differing:
             raise ImmutabilityError(
@@ -110,7 +110,30 @@ def store_asset(src: Path, sidecar: Sidecar, *, allow_existing: bool = True) -> 
 
 # Fields that describe *this ingest run* rather than the capture, and so may legitimately differ
 # between two ingests of identical bytes.
-_PROVENANCE_FIELDS = frozenset({"ingested_at", "raw_vendor_payload"})
+#
+# schema_version is here because the stored sidecar is authoritative and is never rewritten: a
+# version difference records *when* it was written, not a disagreement about the capture. Without
+# this, re-ingesting a card that landed under an older schema would conflict on every file.
+# probe_error is diagnostic text from one ffprobe invocation and is not even deterministic --
+# it embeds a memory address. probe_STATUS is deliberately NOT exempt: if a clip that was
+# unreadable becomes readable (say, after an ffmpeg upgrade), that is a real change about the
+# capture and a human should decide what to do with the earlier record.
+_PROVENANCE_FIELDS = frozenset({"ingested_at", "raw_vendor_payload", "schema_version",
+                                "probe_error"})
+
+
+def _normalise(raw: dict) -> dict:
+    """Fill defaults so a sidecar written before a field existed compares equal to one written now.
+
+    Adding an optional field with a default is a backward-compatible schema change, but a raw
+    dict comparison sees the old sidecar as missing the key and flags a conflict on every file.
+    Validating both sides first means the comparison is over semantic content, not JSON shape.
+    """
+    try:
+        return json.loads(validate_sidecar(raw).to_json())
+    except SidecarError:
+        # Unparseable stored sidecar: compare raw rather than crash, and let the diff report it.
+        return raw
 
 
 def _semantic_diff(prior: dict, incoming: dict) -> set[str]:

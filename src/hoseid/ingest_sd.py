@@ -29,6 +29,9 @@ class IngestReport:
     scanned: int = 0
     ingested: int = 0
     duplicates: int = 0
+    # Clips ingested but unreadable by ffprobe. Counted separately because they are neither a
+    # success nor an ingest error: the asset landed, but analysis cannot look at it.
+    probe_failed: int = 0
     skipped: list[tuple[str, str]] = field(default_factory=list)
     errors: list[tuple[str, str]] = field(default_factory=list)
 
@@ -110,11 +113,18 @@ def ingest_directory(src_dir: Path, station: str, *, vendor: str = "unknown",
             bi, bt = _burst(p)
 
             vmeta = None
+            probe_status, probe_error = "ok", None
             if media is MediaType.video:
-                # Probe rather than guess: stage 1 needs duration to compute sampling cadence,
-                # and the sidecar validator refuses a video without it.
-                vmeta = video.probe(p)
-                w, h = vmeta.width, vmeta.height
+                # Probe rather than guess: stage 1 needs duration to compute sampling cadence.
+                # A probe failure does NOT discard the asset -- ingest must not fail (invariant 6)
+                # and the bytes are the irreplaceable part. It is recorded on the sidecar so
+                # analysis routes the clip to decode_failed instead of silently sampling nothing.
+                vmeta, probe_error = video.probe_safe(p)
+                if vmeta is None:
+                    probe_status = "failed"
+                    rep.probe_failed += 1
+                else:
+                    w, h = vmeta.width, vmeta.height
 
             sc = Sidecar(
                 asset_id=asset_id,
@@ -139,6 +149,8 @@ def ingest_directory(src_dir: Path, station: str, *, vendor: str = "unknown",
                 duration_s=vmeta.duration_s if vmeta else None,
                 fps=vmeta.fps if vmeta else None,
                 frame_count=vmeta.frame_count if vmeta else None,
+                probe_status=probe_status,
+                probe_error=probe_error,
                 raw_vendor_payload={"source_filename": p.name,
                                     "source_relpath": str(p.relative_to(src_dir))},
             )

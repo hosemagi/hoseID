@@ -122,6 +122,13 @@ class Sidecar(BaseModel):
     fps: float | None = None
     frame_count: int | None = None
 
+    # "failed" means ffprobe could not return usable duration/fps for this clip. The asset is
+    # still landed -- the bytes are the irreplaceable part and a future ffmpeg may decode them --
+    # but analysis must treat it as a decode failure rather than attempting to sample it, and
+    # must never record it as an empty capture.
+    probe_status: Literal["ok", "failed"] = "ok"
+    probe_error: str | None = None
+
     conditions: Conditions = Field(default_factory=Conditions)
     trigger_type: TriggerType = TriggerType.unknown
     burst_index: int | None = None
@@ -156,14 +163,23 @@ class Sidecar(BaseModel):
         """
         is_video = MediaType(self.media_type) is MediaType.video
         missing = [f for f in ("duration_s", "fps", "frame_count") if getattr(self, f) is None]
-        if is_video and missing:
-            raise ValueError(f"media_type=video requires {missing}")
+        # A clip whose probe failed legitimately has no duration/fps to record. It still lands,
+        # flagged, and analysis routes it to decode_failed instead of sampling it.
+        if is_video and missing and self.probe_status == "ok":
+            raise ValueError(f"media_type=video requires {missing} (or probe_status='failed')")
         if not is_video and len(missing) < 3:
             present = [f for f in ("duration_s", "fps", "frame_count") if getattr(self, f) is not None]
             raise ValueError(f"media_type={self.media_type} must not carry video fields {present}")
-        if is_video and self.duration_s is not None and self.duration_s <= 0:
-            raise ValueError("duration_s must be > 0")
+        if not is_video and self.probe_status != "ok":
+            raise ValueError("probe_status is meaningful only for video")
+        if is_video and self.probe_status == "ok" and self.duration_s is not None \
+                and self.duration_s <= 0:
+            raise ValueError("duration_s must be > 0 when probe_status='ok'")
         return self
+
+    @property
+    def probe_ok(self) -> bool:
+        return self.probe_status == "ok"
 
     @property
     def is_video(self) -> bool:

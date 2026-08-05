@@ -109,6 +109,36 @@ and the returned dict is labelled so the distinction survives into whatever cons
 `test_group_size_stats_excludes_video_by_default`,
 `test_including_lower_bounds_is_possible_but_labelled`.
 
+### 8. A decode failure is not an empty capture
+
+`sampled_frames == 0` on a video, or metadata too broken to sample from, means **we could not
+look** — which is a different fact from **we looked and saw nothing**. Only the second belongs in
+the empty-capture bucket.
+
+Without this, a codec hoseID cannot read looks exactly like a station where nothing walked past:
+same zero count, same empty flag, no reason to investigate. That is the same silent-failure shape
+as the geofence that no-op'd while recording itself as applied, and hosenotify sitting dead on
+every peer while appearing installed.
+
+*Enforced:* `video.decode_state()` decides the outcome; `stages/detect.py` writes
+`captures.decode_status` and forces `is_empty = 0` for failures, printing to stderr as it goes.
+The `captures_census` view excludes them (a clip that could not be opened contributes no count at
+all, not even a lower bound), `captures_decode_failed` makes them countable,
+`review.station_activity` reports `decode_failures` alongside — never folded into —
+`empty_captures`, and `hoseid stats` prints a loud warning listing them.
+
+Ingest is deliberately unaffected: a clip whose probe fails still **lands** in the landing zone
+(invariant 6 — ingest must not fail, and the bytes are the irreplaceable part; a future ffmpeg
+may well decode them). The failure is recorded on the sidecar via `probe_status` / `probe_error`,
+and `IngestReport.probe_failed` counts it separately from ingest errors.
+
+*Tests:* `test_decode_state_video_with_zero_sampled_frames_is_a_failure`,
+`test_decode_state_unusable_duration_or_fps_is_a_failure`,
+`test_decode_failure_is_excluded_from_empty_capture_stats`,
+`test_decode_failures_are_countable_and_inspectable`,
+`test_decode_failure_excluded_from_census`,
+`test_corrupt_clip_still_lands_in_the_landing_zone`.
+
 ---
 
 ## Two non-negotiable operational facts

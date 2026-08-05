@@ -65,6 +65,23 @@ evenly across the *whole* clip rather than truncating at 20 s — otherwise an a
 late in a long clip would never be sampled. The policy is recorded per run in `runs.sampling_policy`
 so a re-run at different density is comparable rather than silently different.
 
+Frames are selected on elapsed presentation time and their **real PTS** is read back, rather than
+deriving `frame_index / rate`. That matters on variable-frame-rate sources: a clip with a gap in
+its timestamps makes the `fps` filter duplicate frames across the gap and label them with
+fabricated offsets — measured at up to 20.5 s wrong on a 20 s stall, for a field whose entire job
+is scrubbing to the right moment.
+
+**A decode failure is not an empty capture** (invariant 8). A clip that could not be read is
+recorded with `decode_status = 'decode_failed'`, excluded from empty-capture stats and from the
+census view, and surfaced loudly by `hoseid stats`. An unreadable clip still lands in the landing
+zone — the bytes are the irreplaceable part — flagged via `probe_status` on its sidecar.
+
+**Known limitation.** Because the cap spreads, effective fps falls as clip duration grows: a
+5-minute clip samples at ~0.13 fps, so an animal crossing frame in 3 seconds can be missed
+entirely. This is still a valid lower bound under invariant 7, but clip duration silently controls
+detection sensitivity. Revisit once real Arlo/Reveal clip durations are known — if long clips are
+common, the cap should scale with duration rather than stay fixed.
+
 ## Layout
 
 | Path | Contents | Backup priority |

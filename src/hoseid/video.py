@@ -11,6 +11,7 @@ the derived layer is regenerable, and intermediate frames are not worth storing)
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -144,6 +145,59 @@ def probe(path: Path) -> VideoMeta:
                      width=int(w) if w else None, height=int(h) if h else None)
 
 
+_PTS_RE = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
+
+
+def _parse_showinfo_pts(stderr: str) -> list[float]:
+    """Pull each emitted frame's real presentation timestamp out of showinfo's log lines."""
+    return [float(m.group(1)) for m in _PTS_RE.finditer(stderr)]
+
+
+# --- capture state ------------------------------------------------------------
+# A video capture has three outcomes, and conflating the last two is the bug this guards against.
+STATE_OK = "ok"
+STATE_DECODE_FAILED = "decode_failed"
+
+
+def decode_state(is_video: bool, duration_s: float | None, fps: float | None,
+                 n_sampled: int | None, probe_ok: bool = True) -> str:
+    """Decide whether a capture was analysable at all.
+
+    `sampled_frames == 0` on a video, or metadata too broken to sample from, is a DECODE FAILURE
+    and must not be recorded as an empty capture. The distinction is "we looked and saw nothing"
+    versus "we could not look", and only the first belongs in the empty bucket.
+
+    This matters because a codec hoseID cannot read would otherwise look exactly like a station
+    where nothing walked past -- indistinguishable, uncounted, and with no reason to investigate.
+    That is the same silent-failure shape as the geofence that no-op'd while recording itself as
+    applied.
+    """
+    if not is_video:
+        return STATE_OK
+    if not probe_ok:
+        return STATE_DECODE_FAILED
+    if duration_s is None or duration_s <= 0:
+        return STATE_DECODE_FAILED
+    if fps is None or fps <= 0:
+        return STATE_DECODE_FAILED
+    if n_sampled is not None and n_sampled == 0:
+        return STATE_DECODE_FAILED
+    return STATE_OK
+
+
+def probe_safe(path: Path) -> tuple[VideoMeta | None, str | None]:
+    """probe() that reports failure instead of raising.
+
+    Ingest must not fail (invariant 6): an unreadable clip still has to land in the landing zone,
+    because the bytes are the irreplaceable part and a future ffmpeg may well decode them. The
+    failure is recorded on the sidecar rather than discarding the asset.
+    """
+    try:
+        return probe(path), None
+    except VideoError as e:
+        return None, str(e)[:300]
+
+
 @dataclass(frozen=True)
 class SampledFrame:
     frame_index: int          # index within the sampled sequence, not the source stream
@@ -169,23 +223,48 @@ class FrameSampler:
         self._tmp: tempfile.TemporaryDirectory | None = None
 
     def __enter__(self) -> list[SampledFrame]:
+        """Select frames by elapsed presentation time and read back their true timestamps.
+
+        Deliberately NOT the `fps` filter. `fps` resamples onto a synthetic constant-rate output
+        timeline, so the only offset you can recover is `frame_index / rate` -- a derivation, not
+        a measurement. On variable-frame-rate sources that drifts and the error accumulates:
+        measured on a VFR test clip, frame 7 sat at a true 11.167 s where the derived value said
+        10.51 s, and the gap widened from there. Arlo is a plausible VFR source, and this field's
+        entire job is letting review scrub straight to the moment, so seconds of drift is
+        directly user-visible.
+
+        Instead: `select` on `t - prev_selected_t`, which is expressed in real presentation time
+        and therefore correct regardless of frame-rate variability, with `showinfo` reporting each
+        emitted frame's actual `pts_time`. `-fps_mode passthrough` keeps ffmpeg from duplicating
+        or dropping frames to hit a cadence.
+        """
         self._tmp = tempfile.TemporaryDirectory(prefix="hoseid-frames-")
         out = Path(self._tmp.name)
-        cmd = [FFMPEG, "-v", "error", "-nostdin", "-i", str(self.path),
-               "-vf", f"fps={self.fps:.6f}",
+        interval = (1.0 / self.fps) if self.fps > 0 else 0.5
+        select = (f"select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval:.6f})'"
+                  ",showinfo")
+        cmd = [FFMPEG, "-v", "info", "-nostdin", "-i", str(self.path),
+               "-vf", select, "-fps_mode", "passthrough",
                "-frames:v", str(self.policy.max_frames),
                "-q:v", "2", str(out / "f_%05d.jpg")]
         p = _run(cmd)
         files = sorted(out.glob("f_*.jpg"))
-        if p.returncode != 0 and not files:
-            raise VideoError(f"ffmpeg failed on {self.path.name}: {p.stderr.decode()[:200]}")
+        if not files:
+            # No frames decoded at all. Caller must treat this as a DECODE FAILURE, not as an
+            # empty capture -- see decode_state(). "We could not look" is not "we looked and
+            # saw nothing".
+            return []
+
+        pts = _parse_showinfo_pts(p.stderr.decode("utf-8", "replace"))
         frames = []
         for i, f in enumerate(files):
-            # The fps filter emits frames at a fixed cadence, so frame i sits at i/fps seconds.
-            offset = i / self.fps if self.fps > 0 else 0.0
-            frames.append(SampledFrame(frame_index=i,
-                                       offset_s=round(min(offset, self.meta.duration_s), 3),
-                                       path=f))
+            if i < len(pts):
+                offset = pts[i]
+            else:
+                # showinfo output did not line up with the written files. Fall back to the
+                # derived cadence rather than mis-assigning a real timestamp to the wrong frame.
+                offset = i * interval
+            frames.append(SampledFrame(frame_index=i, offset_s=round(offset, 3), path=f))
         return frames
 
     def __exit__(self, *exc) -> None:

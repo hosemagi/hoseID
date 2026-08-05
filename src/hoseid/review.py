@@ -68,6 +68,9 @@ def station_activity(run_id: str) -> list[dict[str, Any]]:
         SELECT station,
                COUNT(*)                             AS captures,
                SUM(is_empty)                        AS empty_captures,
+               -- Reported alongside, never folded into empty_captures: a clip that could not be
+               -- decoded is not a quiet station, and the two must stay distinguishable.
+               SUM(CASE WHEN decode_status != 'ok' THEN 1 ELSE 0 END) AS decode_failures,
                SUM(has_animal)                      AS animal_captures,
                SUM(has_human)                       AS human_captures,
                SUM(has_vehicle)                     AS vehicle_captures,
@@ -117,6 +120,21 @@ def group_size_stats(run_id: str, include_lower_bounds: bool = False) -> dict[st
         "INCLUDES video captures, whose counts are LOWER BOUNDS. This is a detection rate, "
         "NOT a group size. Do not report it as mean animals present.")
     return row
+
+
+def decode_failures(run_id: str) -> list[dict[str, Any]]:
+    """Clips that could not be analysed at all.
+
+    Countable and inspectable by design. A decode failure is invisible if it hides inside the
+    empty-capture count -- an unreadable codec would look exactly like a station where nothing
+    walked past, with no reason to investigate. `hoseid stats` surfaces the count; this returns
+    the rows so a real one can be diagnosed.
+    """
+    sql = """SELECT asset_id, station, capture_time, media_type, sampled_frames, decode_error
+             FROM captures_decode_failed WHERE run_id = ?
+             ORDER BY capture_time DESC"""
+    with db.detections() as conn:
+        return [dict(r) for r in conn.execute(sql, (run_id,)).fetchall()]
 
 
 def taxon_summary(run_id: str) -> list[dict[str, Any]]:

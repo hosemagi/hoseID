@@ -83,7 +83,7 @@ def main() -> int:
         if args.limit:
             sidecar_files = sidecar_files[: args.limit]
 
-        n_cap = n_det = n_empty = 0
+        n_cap = n_det = n_empty = n_failed = 0
         for sp in sidecar_files:
             sc = validate_sidecar(sp)
             if not args.reprocess and db.already_processed(conn, sc.asset_id, args.run_id):
@@ -99,10 +99,18 @@ def main() -> int:
             t0 = time.time()
             frame_offset_s = frame_index = None
             n_sampled = None
+            decode_error = None
             try:
-                if sc.is_video:
+                if sc.is_video and not sc.probe_ok:
+                    # ffprobe could not read this clip at ingest. Do not attempt to sample it --
+                    # record the decode failure directly.
+                    boxes, pil, n_sampled = [], Image.new("RGB", (1, 1)), 0
+                    decode_error = sc.probe_error or "probe failed at ingest"
+                elif sc.is_video:
                     boxes, pil, frame_offset_s, frame_index, n_sampled = _detect_video(
                         det, load_image, Image, asset, sc, policy, args.threshold)
+                    if n_sampled == 0:
+                        decode_error = "no frames decoded"
                 else:
                     img = load_image(str(asset))
                     res = det.generate_detections_one_image(img, image_id=sc.asset_id)
@@ -134,14 +142,21 @@ def main() -> int:
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", rows)
 
             classes = {r[7] for r in rows}
-            is_empty = 1 if not rows else 0
+            state = video.decode_state(sc.is_video, sc.duration_s, sc.fps, n_sampled,
+                                       probe_ok=sc.probe_ok)
+            failed = state == video.STATE_DECODE_FAILED
+            # A decode failure is NOT an empty capture. "We could not look" must never be
+            # counted as "we looked and saw nothing", or an unreadable codec presents as a
+            # quiet station and nobody investigates.
+            is_empty = 0 if failed else (1 if not rows else 0)
             n_empty += is_empty
+            n_failed += int(failed)
             conn.execute(
                 """INSERT OR REPLACE INTO captures
                    (asset_id, run_id, station, station_corrected, capture_time, time_trusted,
                     n_detections, has_animal, has_human, has_vehicle, is_empty, detector_ms,
-                    media_type, count_is_lower_bound, sampled_frames)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    media_type, count_is_lower_bound, sampled_frames, decode_status, decode_error)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (sc.asset_id, args.run_id, station, int(corrected),
                  sc.capture_time.isoformat(), int(sc.time_is_trustworthy),
                  len(rows), int("animal" in classes), int("person" in classes),
@@ -149,8 +164,10 @@ def main() -> int:
                  sc.media_type,
                  # Invariant 7: only one frame per clip is kept, so a video count can only ever
                  # be a lower bound on the animals actually present.
-                 int(sc.is_video), n_sampled))
+                 int(sc.is_video), n_sampled, state, decode_error))
             conn.commit()
+            if failed:
+                print(f"  DECODE FAILED {sc.asset_id[:20]} ({decode_error})", file=sys.stderr)
 
             n_cap += 1
             n_det += len(rows)
@@ -161,6 +178,9 @@ def main() -> int:
 
     print(json.dumps({"stage": "detect", "run_id": args.run_id, "captures": n_cap,
                       "detections": n_det, "empty_captures": n_empty,
+                      # Surfaced separately and always, so an unreadable codec is countable
+                      # rather than hiding inside the empty count.
+                      "decode_failures": n_failed,
                       "device": args.device, "threshold": args.threshold}, indent=1))
     return 0
 
