@@ -1,0 +1,112 @@
+{
+  "_comment": [
+    "Maps SpeciesNet taxonomy strings to display labels. This is config, not code, because the",
+    "vocabulary will change as P's tagging habits settle and as the property's species list grows.",
+    "taxon_raw is always retained on the detection record, so any mapping decision here is",
+    "reversible by re-running the mapping without re-running inference."
+  ],
+  "version": "1",
+  "match_on": "last_two_ranks",
+  "map": {
+    "odocoileus;hemionus": {
+      "taxon": "blacktail",
+      "_why": [
+        "SpeciesNet resolves to species level and emits 'mule deer' for O. hemionus. Columbian",
+        "black-tailed deer (O. h. columbianus) is a mule deer subspecies and is the ONLY hemionus",
+        "subspecies present in CA Zone D-3, so on this property the mapping is unambiguous.",
+        "This assumption is property-specific and would be wrong east of the Sierra crest."
+      ]
+    },
+    "odocoileus;virginianus": {
+      "taxon": "whitetail",
+      "_why": [
+        "Should not occur in D-3 and the USA/CA geofence suppresses it, so a whitetail label here",
+        "indicates either a geofence bypass or a genuine oddity. Kept distinct rather than folded",
+        "into deer_unspecified so it stays visible."
+      ]
+    },
+    "odocoileus;": {
+      "taxon": "deer_unspecified",
+      "_why": [
+        "Genus-level fallback emitted when the classifier cannot separate mule from white-tailed.",
+        "Mapped rather than dropped: 'a deer, species uncertain' is useful, a discarded row is not."
+      ]
+    },
+    "puma;concolor": {
+      "taxon": "mountain_lion",
+      "_why": [
+        "The detection where a false negative has real cost. Never filtered by invariant 4."
+      ]
+    },
+    "ursus;americanus": {"taxon": "black_bear"},
+    "lynx;rufus": {"taxon": "bobcat"},
+    "canis;latrans": {"taxon": "coyote"},
+    "urocyon;cinereoargenteus": {"taxon": "gray_fox"},
+    "vulpes;vulpes": {"taxon": "red_fox"},
+    "procyon;lotor": {"taxon": "raccoon"},
+    "mephitis;mephitis": {"taxon": "striped_skunk"},
+    "didelphis;virginiana": {"taxon": "opossum"},
+    "lepus;californicus": {"taxon": "jackrabbit"},
+    "sylvilagus;bachmani": {"taxon": "brush_rabbit"},
+    "meleagris;gallopavo": {"taxon": "wild_turkey"},
+    "callipepla;californica": {"taxon": "california_quail"},
+    "sciurus;griseus": {"taxon": "western_gray_squirrel"},
+    "otospermophilus;beecheyi": {"taxon": "ground_squirrel"},
+    "homo;sapiens": {"taxon": "human"},
+    "canis;familiaris": {"taxon": "domestic_dog"},
+    "felis;catus": {"taxon": "domestic_cat"},
+    ";vehicle": {"taxon": "vehicle"},
+    ";blank": {"taxon": "blank"},
+
+    "cervidae": {
+      "taxon": "deer_unspecified",
+      "_why": "Family-level deer. In D-3 this is almost certainly blacktail, but the classifier declined to commit, so neither should we."
+    },
+    "felidae": {
+      "taxon": "unknown_felid",
+      "_why": [
+        "SAFETY-RELEVANT. A family-level cat could be a mountain lion, so this must never be",
+        "quietly filed as a generic unknown. Listed in review_priority.always_high."
+      ]
+    },
+    "canidae": {"taxon": "unknown_canid"},
+    "ursidae": {"taxon": "black_bear", "_why": "The only ursid in D-3."},
+    "mustelidae": {"taxon": "unknown_mustelid"},
+    "sciuridae": {"taxon": "unknown_squirrel"},
+    "leporidae": {"taxon": "unknown_rabbit"},
+    "procyonidae": {"taxon": "raccoon", "_why": "The only procyonid in D-3."},
+    "mephitidae": {"taxon": "unknown_skunk"},
+    "didelphidae": {"taxon": "opossum", "_why": "The only didelphid in North America."},
+    "phasianidae": {"taxon": "unknown_gamebird"},
+    "odontophoridae": {"taxon": "unknown_quail"},
+    "cetartiodactyla": {"taxon": "deer_unspecified", "_why": "Order-level fallback; the only wild artiodactyls in D-3 are deer."},
+    "carnivora": {"taxon": "unknown_carnivore", "_why": "Order-level. Could be a lion; treated as high priority."}
+  },
+  "fallbacks": {
+    "_comment": "Applied when no exact match. Order matters; first hit wins.",
+    "rules": [
+      {"contains": "mammalia", "taxon": "unknown_mammal"},
+      {"contains": "aves", "taxon": "unknown_bird"}
+    ],
+    "default": "unknown"
+  },
+  "review_priority": {
+    "_comment": [
+      "Drives ordering in the review queue only. It NEVER filters what is loggable or reachable",
+      "(invariant 4). SpeciesNet's calibrated confidence replaces the VLM's self-reported",
+      "abstention as the 'surface this for a human' signal."
+    ],
+    "always_high": [
+      "mountain_lion", "human", "vehicle",
+      "unknown_felid", "unknown_carnivore"
+    ],
+    "_always_high_why": [
+      "unknown_felid and unknown_carnivore are here because a geofence roll-up can turn a",
+      "mountain lion into a family- or order-level label. Invariant 4 guarantees such a",
+      "detection is still loggable and reachable; putting it at the top of the queue is what",
+      "makes it reachable in practice rather than only in principle."
+    ],
+    "low_confidence_threshold": 0.6,
+    "unknown_taxa_priority": "high"
+  }
+}

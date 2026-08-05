@@ -1,0 +1,7 @@
+.venv/
+.venv-detector/
+.venv-classifier/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+*.pyc

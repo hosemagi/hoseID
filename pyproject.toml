@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hoseid"
+version = "0.1.0"
+description = "Trail-camera capture identification pipeline for the cabin property"
+requires-python = ">=3.12"
+# Kept deliberately dependency-light: this package is installed into all three venvs
+# (main, detector, classifier) and must not drag conflicting pins into either ML environment.
+# See docs/ENVIRONMENTS.md -- speciesnet and megadetector have an unresolvable protobuf conflict.
+dependencies = [
+    "pydantic>=2.6",
+    "click>=8.1",
+]
+
+[project.scripts]
+hoseid = "hoseid.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
