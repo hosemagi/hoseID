@@ -45,7 +45,8 @@ PRESET_TAGS = [
     ("empty", "e"), ("deer", "d"), ("bear", "b"), ("mountain-lion", "m"),
     ("coyote", "c"), ("bobcat", "w"), ("fox", "f"), ("skunk", "k"),
     ("turkey", "t"), ("jackrabbit", "j"), ("squirrel", "s"), ("bird", "i"),
-    ("other-animal", "o"), ("person", "p"), ("vehicle", "v"), ("unsure", "u"),
+    ("domestic-dog", "g"), ("other-animal", "o"), ("person", "p"),
+    ("vehicle", "v"), ("unsure", "u"),
 ]
 
 FNAME_RE = re.compile(

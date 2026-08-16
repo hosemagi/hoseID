@@ -5,7 +5,7 @@
     "taxon_raw is always retained on the detection record, so any mapping decision here is",
     "reversible by re-running the mapping without re-running inference."
   ],
-  "version": "2",
+  "version": "3",
   "match_on": "last_two_ranks",
   "map": {
     "odocoileus;hemionus": {
@@ -26,7 +26,7 @@
       ]
     },
     "odocoileus;": {
-      "taxon": "deer_unspecified",
+      "taxon": "blacktail",
       "_why": [
         "Genus-level fallback emitted when the classifier cannot separate mule from white-tailed.",
         "Mapped rather than dropped: 'a deer, species uncertain' is useful, a discarded row is not."
@@ -42,7 +42,14 @@
     "lynx;rufus": {"taxon": "bobcat"},
     "canis;latrans": {"taxon": "coyote"},
     "urocyon;cinereoargenteus": {"taxon": "gray_fox"},
-    "vulpes;vulpes": {"taxon": "red_fox"},
+    "vulpes;vulpes": {
+      "taxon": "gray_fox",
+      "_why": [
+        "Property prior (P, 2026-08-16): foxes here are gray fox. Sierra Nevada red fox is an",
+        "alpine rarity absent at foothill elevations (95959), so a red-fox species call is a",
+        "gray fox misread. taxon_raw retained; reversible by remap if that ever changes."
+      ]
+    },
     "procyon;lotor": {"taxon": "raccoon"},
     "mephitis;mephitis": {"taxon": "striped_skunk"},
     "didelphis;virginiana": {"taxon": "opossum"},
@@ -59,8 +66,12 @@
     ";blank": {"taxon": "blank"},
 
     "cervidae": {
-      "taxon": "deer_unspecified",
-      "_why": "Family-level deer. In D-3 this is almost certainly blacktail, but the classifier declined to commit, so neither should we."
+      "taxon": "blacktail",
+      "_why": [
+        "Property prior (P, 2026-08-16): Sierra foothills, 95959 — the only deer here are",
+        "blacktail, so genus/family/order rollups all take the prior. A species-level",
+        "odocoileus;virginianus call still maps to whitetail above as an anomaly signal."
+      ]
     },
     "felidae": {
       "taxon": "unknown_felid",
@@ -72,7 +83,14 @@
     "canidae": {"taxon": "unknown_canid"},
     "ursidae": {"taxon": "black_bear", "_why": "The only ursid in D-3."},
     "mustelidae": {"taxon": "unknown_mustelid"},
-    "sciuridae": {"taxon": "unknown_squirrel"},
+    "sciuridae": {
+      "taxon": "western_gray_squirrel",
+      "_why": [
+        "Property prior (P, 2026-08-16): squirrels here are western grays. Family rollup takes",
+        "the prior; a species-level otospermophilus;beecheyi call still maps to ground_squirrel",
+        "above so a confident ground-squirrel ID stays visible."
+      ]
+    },
     "leporidae": {
       "taxon": "jackrabbit",
       "_why": [
@@ -88,7 +106,7 @@
     "didelphidae": {"taxon": "opossum", "_why": "The only didelphid in North America."},
     "phasianidae": {"taxon": "unknown_gamebird"},
     "odontophoridae": {"taxon": "unknown_quail"},
-    "cetartiodactyla": {"taxon": "deer_unspecified", "_why": "Order-level fallback; the only wild artiodactyls in D-3 are deer."},
+    "cetartiodactyla": {"taxon": "blacktail", "_why": "Order-level fallback; the only wild artiodactyls here are blacktail deer (property prior, 95959)."},
     "carnivora": {"taxon": "unknown_carnivore", "_why": "Order-level. Could be a lion; treated as high priority."}
   },
   "fallbacks": {
