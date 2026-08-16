@@ -5,7 +5,7 @@
     "taxon_raw is always retained on the detection record, so any mapping decision here is",
     "reversible by re-running the mapping without re-running inference."
   ],
-  "version": "1",
+  "version": "2",
   "match_on": "last_two_ranks",
   "map": {
     "odocoileus;hemionus": {
@@ -73,7 +73,16 @@
     "ursidae": {"taxon": "black_bear", "_why": "The only ursid in D-3."},
     "mustelidae": {"taxon": "unknown_mustelid"},
     "sciuridae": {"taxon": "unknown_squirrel"},
-    "leporidae": {"taxon": "unknown_rabbit"},
+    "leporidae": {
+      "taxon": "jackrabbit",
+      "_why": [
+        "Property prior, measured 2026-08-16: all 8 family-level leporid rollups in the first",
+        "fully-tagged corpus were human-confirmed jackrabbits, and P's tag vocabulary does not",
+        "separate brush rabbit. A species-level sylvilagus;bachmani call still maps to",
+        "brush_rabbit above; only the family rollup takes the prior. taxon_raw is retained,",
+        "so this is reversible by remap if brush rabbits start appearing."
+      ]
+    },
     "procyonidae": {"taxon": "raccoon", "_why": "The only procyonid in D-3."},
     "mephitidae": {"taxon": "unknown_skunk"},
     "didelphidae": {"taxon": "opossum", "_why": "The only didelphid in North America."},
