@@ -41,6 +41,9 @@ CATEGORY = {
 def main() -> int:
     wl = sqlite3.connect(WILDLIFE_DB)
     wl.row_factory = sqlite3.Row
+    if "media_refs" not in {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}:
+        wl.execute("ALTER TABLE sightings ADD COLUMN media_refs TEXT"
+                   " NOT NULL DEFAULT '[]'")
     tags = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
     tags.row_factory = sqlite3.Row
     det = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True) \
@@ -91,12 +94,22 @@ def main() -> int:
                 (asset_id, sp)).fetchone() if asset_id else None
             if dup:
                 continue
+            media = []
+            if asset_id:
+                digest = asset_id.split(":", 1)[1]
+                hits = list((Path.home() / "trailcam/landing/assets" /
+                             digest[:2] / digest[2:4]).glob(f"{digest}.*"))
+                if hits:
+                    media.append({"ref": asset_id, "path": str(hits[0]),
+                                  "kind": "video" if hits[0].suffix == ".mp4"
+                                  else "image"})
             wl.execute(
                 "INSERT INTO sightings (date, time, station, species, count,"
-                " source, category, capture_asset_id, auto, notes)"
-                " VALUES (?,?,?,?,?,?,?,?,1,?)",
+                " source, category, capture_asset_id, auto, notes, media_refs)"
+                " VALUES (?,?,?,?,?,?,?,?,1,?,?)",
                 (date, time, station, sp, counts.get(sp, 1), "camera",
-                 CATEGORY.get(sp, "other"), asset_id, r["notes"] or ""))
+                 CATEGORY.get(sp, "other"), asset_id, r["notes"] or "",
+                 json.dumps(media)))
             added += 1
 
     wl.execute("INSERT OR REPLACE INTO meta VALUES ('review_watermark', ?)",
