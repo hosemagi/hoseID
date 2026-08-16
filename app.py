@@ -29,6 +29,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ASSETS = Path("/Users/hosebot/trailcam/landing/assets")
+SIDECARS = Path("/Users/hosebot/trailcam/landing/sidecars")
+DETECTIONS_DB = Path("/Users/hosebot/trailcam/derived/detections.db")
 MD_RESULTS = Path(
     "/Users/hosebot/trailcam/derived/runs/2026-08-16-md-combined/md_results.json"
 )
@@ -162,6 +164,80 @@ SPECIES = (
     if SPECIES_PREDICTIONS.exists() else {}
 )
 
+# --- pipeline captures (fetch daemon -> landing zone -> nightly hoseid run) ---
+# Read live from detections.db, cached on its mtime, so new nightly output
+# appears in the review queue without an app restart.
+_CAT_CODE = {"animal": "1", "person": "2", "vehicle": "3"}
+_LOCAL_TZ = __import__("zoneinfo").ZoneInfo("America/Los_Angeles")
+_pipeline_cache = {"mtime": None, "items": {}}
+
+
+def _sidecar_meta(digest: str) -> dict:
+    p = SIDECARS / digest[:2] / digest[2:4] / f"{digest}.json"
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text())
+
+
+def pipeline_images() -> dict:
+    if not DETECTIONS_DB.exists():
+        return {}
+    mtime = DETECTIONS_DB.stat().st_mtime
+    if _pipeline_cache["mtime"] == mtime:
+        return _pipeline_cache["items"]
+    conn = sqlite3.connect(DETECTIONS_DB)
+    conn.row_factory = sqlite3.Row
+    # latest capture row per asset (a standing run_id keeps this to one row,
+    # but re-runs under new ids must not duplicate queue entries)
+    caps = {r["asset_id"]: r for r in conn.execute(
+        "SELECT * FROM captures ORDER BY rowid")}
+    dets_by_asset = {}
+    for d in conn.execute("SELECT * FROM detections ORDER BY detection_id"):
+        dets_by_asset.setdefault((d["asset_id"], d["run_id"]), []).append(d)
+    conn.close()
+
+    items = {}
+    for asset_id, cap in caps.items():
+        digest = asset_id.split(":", 1)[1]
+        hits = list((ASSETS / digest[:2] / digest[2:4]).glob(f"{digest}.*"))
+        if not hits:
+            continue
+        asset = hits[0]
+        meta = _sidecar_meta(digest)
+        rows = dets_by_asset.get((asset_id, cap["run_id"]), [])
+        dets, species = [], []
+        for i, d in enumerate(rows):
+            dets.append({
+                "category": _CAT_CODE.get(d["detector_class"], d["detector_class"]),
+                "conf": d["detector_confidence"],
+                "bbox": [d["bbox_x"], d["bbox_y"], d["bbox_w"], d["bbox_h"]],
+            })
+            if d["taxon"]:
+                species.append({"det_index": i, "taxon": d["taxon"],
+                                "score": d["taxon_confidence"],
+                                "taxon_raw": d["taxon_raw"],
+                                "review_priority": d["review_priority"]})
+        cap_dt = datetime.fromisoformat(cap["capture_time"])
+        captured = cap_dt.astimezone(_LOCAL_TZ).replace(tzinfo=None).isoformat()
+        items[asset.name] = {
+            "basename": asset.name,
+            "image": str(asset.relative_to(ASSETS)),
+            "media_type": cap["media_type"] if "media_type" in cap.keys() else "image",
+            "station": cap["station"],
+            "device_id": meta.get("device_id"),
+            "captured_at": captured,
+            "detections": dets,
+            "md_max_conf": max((d["conf"] for d in dets), default=0.0),
+            "pipeline_species": species or None,
+        }
+    _pipeline_cache.update(mtime=mtime, items=items)
+    return items
+
+
+def all_images() -> dict:
+    return {**IMAGES, **pipeline_images()}
+
+
 init_db()
 
 app = FastAPI(title="hoseID review")
@@ -261,7 +337,7 @@ class EpochIn(BaseModel):
 
 @app.get("/api/config")
 def config():
-    devices = sorted({im["device_id"] for im in IMAGES.values() if im["device_id"]})
+    devices = sorted({im["device_id"] for im in all_images().values() if im["device_id"]})
     move_flags = (
         json.loads(MOVE_FLAGS.read_text()) if MOVE_FLAGS.exists() else {}
     )
@@ -381,7 +457,7 @@ def suppressed(device: str = "", since: str = "", until: str = ""):
     for z in zones_all:
         by_dev.setdefault(z["device_id"], []).append(z)
     total, by_cat, by_month = 0, {}, {}
-    for im in IMAGES.values():
+    for im in all_images().values():
         if device and im["device_id"] != device:
             continue
         cap = im["captured_at"] or ""
@@ -411,7 +487,7 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
     for z in zones_all:
         by_dev.setdefault(z["device_id"], []).append(z)
     items = []
-    for im in IMAGES.values():
+    for im in all_images().values():
         if device and im["device_id"] != device:
             continue
         r = reviewed.get(im["basename"])
@@ -423,7 +499,8 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
         dev_zones = by_dev.get(im["device_id"], [])
         dets = [dict(d, excluded=_excluded(d, dev_zones)) for d in im["detections"]]
         item["detections"] = dets
-        item["species"] = SPECIES.get(im["basename"])
+        item["species"] = im.get("pipeline_species") or SPECIES.get(im["basename"])
+        item.pop("pipeline_species", None)
         item["md_max_conf_eff"] = max(
             (d["conf"] for d in dets if not d["excluded"]), default=0.0
         )
@@ -452,9 +529,9 @@ def stats():
             per_tag[t] = per_tag.get(t, 0) + 1
             individuals[t] = individuals.get(t, 0) + counts.get(t, 1)
     return {
-        "total": len(IMAGES),
+        "total": len(all_images()),
         "reviewed": len(reviewed),
-        "unreviewed": len(IMAGES) - len(reviewed),
+        "unreviewed": len(all_images()) - len(reviewed),
         "per_tag": dict(sorted(per_tag.items(), key=lambda kv: -kv[1])),
         "individuals": dict(sorted(individuals.items(), key=lambda kv: -kv[1])),
     }
@@ -462,7 +539,7 @@ def stats():
 
 @app.post("/api/review")
 def review(r: ReviewIn):
-    im = IMAGES.get(r.basename)
+    im = all_images().get(r.basename)
     if not im:
         raise HTTPException(404, f"unknown image {r.basename}")
     if not r.tags:

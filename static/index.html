@@ -70,6 +70,8 @@
   <div id="stage">
     <div id="imgwrap">
       <img id="photo" alt="">
+      <video id="clip" controls muted loop playsinline
+             style="display:none;max-width:100%;max-height:calc(100vh - 120px);border-radius:4px"></video>
       <div id="meta"></div>
     </div>
     <div id="done">Queue empty — nothing left to review with these filters. 🎉</div>
@@ -167,7 +169,7 @@ async function show() {
   $('done').style.display = item ? 'none' : 'block';
   $('imgwrap').style.display = item ? 'block' : 'none';
   if (!item) { $('zonepanel').innerHTML = ''; return; }
-  if (!(item.device_id in ZONES)) await loadZones(item.device_id);
+  if (item.device_id && !(item.device_id in ZONES)) await loadZones(item.device_id);
   sel = new Map();
   if (item.review) item.review.tags.forEach(t =>
     sel.set(t, (item.review.counts || {})[t] || 1));
@@ -182,21 +184,38 @@ async function show() {
       .map(([t, s]) => `${t} ${s.toFixed(2)}`).join(' · ');
     $('species').style.display = 'block';
   } else { $('species').style.display = 'none'; }
-  const img = $('photo');
-  img.onload = () => drawBoxes(item);
-  img.src = '/images/' + encodeURI(item.image);
+  const isVideo = item.media_type === 'video' || item.image.endsWith('.mp4');
+  const img = $('photo'), vid = $('clip');
+  if (isVideo) {
+    img.style.display = 'none';
+    vid.style.display = 'block';
+    vid.src = '/images/' + encodeURI(item.image);
+    vid.play().catch(() => {});
+    drawBoxes(null);   // boxes belong to one sampled frame; skip overlay on video
+  } else {
+    vid.pause(); vid.removeAttribute('src'); vid.style.display = 'none';
+    img.style.display = 'block';
+    img.onload = () => drawBoxes(item);
+    img.src = '/images/' + encodeURI(item.image);
+  }
   const zones = ZONES[item.device_id] || [];
   const eff = Math.max(0, ...item.detections.filter(d => !isExcluded(d, zones)).map(d => d.conf));
   const dt = (item.captured_at || '').replace('T', ' ');
+  const who = item.station || ('…' + (item.device_id || 'unknown').slice(-6));
   $('meta').textContent =
-    `…${item.device_id.slice(-6)} · ${dt} · MD eff ${eff.toFixed(2)}` +
+    `${who} · ${dt} · MD eff ${eff.toFixed(2)}` +
+    (isVideo ? ' · video' : '') +
     ` · ${pos + 1}/${queue.length}` + (item.review ? ' · previously reviewed' : '');
   paintZonePanel(item.device_id);
-  if (queue[pos + 1]) { const p = new Image(); p.src = '/images/' + encodeURI(queue[pos + 1].image); }
+  const nxt = queue[pos + 1];
+  if (nxt && !(nxt.media_type === 'video' || nxt.image.endsWith('.mp4'))) {
+    const p = new Image(); p.src = '/images/' + encodeURI(nxt.image);
+  }
   refreshStats();
 }
 
 function paintZonePanel(device) {
+  if (!device) { $('zonepanel').innerHTML = ''; return; }
   const zones = ZONES[device] || [];
   const areas = {};
   zones.forEach(z => areas[z.category] = (areas[z.category] || 0) + z.w * z.h);
