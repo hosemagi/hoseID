@@ -75,6 +75,7 @@
     <div id="done">Queue empty — nothing left to review with these filters. 🎉</div>
   </div>
   <aside>
+    <div id="species" class="hint" style="display:none"></div>
     <div id="tags"></div>
     <textarea id="notes" placeholder="notes… (n to focus, Esc to leave)"></textarea>
     <button id="save">save &amp; next&nbsp;&nbsp;⏎</button>
@@ -172,6 +173,15 @@ async function show() {
     sel.set(t, (item.review.counts || {})[t] || 1));
   $('notes').value = item.review ? item.review.notes : '';
   paintTags();
+  if (item.species && item.species.length) {
+    const best = {};
+    item.species.forEach(p => {
+      if (!best[p.taxon] || p.score > best[p.taxon]) best[p.taxon] = p.score; });
+    $('species').textContent = '🔎 SpeciesNet: ' + Object.entries(best)
+      .sort((a, b) => b[1] - a[1])
+      .map(([t, s]) => `${t} ${s.toFixed(2)}`).join(' · ');
+    $('species').style.display = 'block';
+  } else { $('species').style.display = 'none'; }
   const img = $('photo');
   img.onload = () => drawBoxes(item);
   img.src = '/images/' + encodeURI(item.image);
@@ -246,13 +256,14 @@ function drawBoxes(item) {
       };
       $('imgwrap').appendChild(el);
     }
-    for (const d of item.detections) {
+    for (const [di, d] of item.detections.entries()) {
       const [x, y, w, h] = d.bbox;
       const excl = isExcluded(d, zones);
+      const sp = (item.species || []).find(p => p.det_index === di);
       const el = document.createElement('div');
       el.className = 'box' + (d.conf < 0.5 ? ' lowconf' : '') + (excl ? ' excl' : '');
       el.style.cssText = `left:${x * W}px;top:${y * H}px;width:${w * W}px;height:${h * H}px`;
-      el.innerHTML = `<span>${CATS[d.category] || d.category} ${d.conf.toFixed(2)}${excl ? ' (excl)' : ''}</span>`;
+      el.innerHTML = `<span>${sp ? sp.taxon : (CATS[d.category] || d.category)} ${d.conf.toFixed(2)}${excl ? ' (excl)' : ''}</span>`;
       el.title = excl ? 'already inside an exclusion zone'
                       : `click to exclude ${CATS[d.category]} detections here`;
       el.onclick = ev => {

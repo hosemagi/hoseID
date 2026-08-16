@@ -34,6 +34,7 @@ MD_RESULTS = Path(
 )
 DB_PATH = Path("/Users/hosebot/trailcam/tags/tags.db")
 MOVE_FLAGS = Path("/Users/hosebot/trailcam/derived/camera-move-flags.json")
+SPECIES_PREDICTIONS = MD_RESULTS.parent / "speciesnet_predictions.json"
 STATIC = Path(__file__).parent / "static"
 
 MAX_ZONE_AREA_FRAC = 0.25   # a single zone larger than this needs confirm
@@ -152,6 +153,14 @@ def load_images():
 
 
 IMAGES = load_images()
+
+# Optional sidecar from scripts/classify_md_results.py: basename -> per-detection
+# SpeciesNet predictions. Suggestions only — never auto-applied as tags.
+SPECIES = (
+    json.loads(SPECIES_PREDICTIONS.read_text())["predictions"]
+    if SPECIES_PREDICTIONS.exists() else {}
+)
+
 init_db()
 
 app = FastAPI(title="hoseID review")
@@ -413,6 +422,7 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
         dev_zones = by_dev.get(im["device_id"], [])
         dets = [dict(d, excluded=_excluded(d, dev_zones)) for d in im["detections"]]
         item["detections"] = dets
+        item["species"] = SPECIES.get(im["basename"])
         item["md_max_conf_eff"] = max(
             (d["conf"] for d in dets if not d["excluded"]), default=0.0
         )
