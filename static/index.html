@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hoseID review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #14171a; --panel: #1d2126; --edge: #2c3238; --fg: #d8dde2;
+    --dim: #8a939c; --accent: #5fb2f2; --on: #2c6e49; --warn: #c9a227;
+    --excl: #d06a6a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.45 -apple-system, system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); flex-wrap: wrap; }
+  header h1 { font-size: 15px; font-weight: 600; margin-right: 6px; }
+  select { background: var(--bg); color: var(--fg); border: 1px solid var(--edge); border-radius: 5px; padding: 3px 6px; font-size: 13px; }
+  #progress { color: var(--dim); font-size: 13px; margin-left: auto; }
+  #progress b { color: var(--fg); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; padding: 10px; min-width: 0; }
+  #imgwrap { position: relative; max-width: 100%; max-height: 100%; }
+  #photo { max-width: 100%; max-height: calc(100vh - 120px); display: block; border-radius: 4px; }
+  .box { position: absolute; border: 2px solid var(--accent); border-radius: 2px; cursor: pointer; }
+  .box span { position: absolute; top: -20px; left: -2px; background: var(--accent); color: #08131c; font-size: 11px; font-weight: 600; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+  .box.lowconf { border-color: var(--warn); } .box.lowconf span { background: var(--warn); }
+  .box.excl { border-style: dashed; opacity: .45; }
+  .zone { position: absolute; border: 2px dashed var(--excl); border-radius: 2px; cursor: pointer; background: rgba(208,106,106,.07); }
+  .zone span { position: absolute; bottom: 2px; right: 4px; color: var(--excl); font-size: 10px; font-weight: 600; }
+  #meta { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); background: rgba(20,23,26,.85); padding: 4px 12px; border-radius: 6px; font-size: 12.5px; color: var(--dim); white-space: nowrap; }
+  aside { width: 300px; background: var(--panel); border-left: 1px solid var(--edge); padding: 14px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+  #tags { display: flex; flex-direction: column; gap: 4px; }
+  .tag { display: flex; align-items: center; gap: 9px; padding: 5px 9px; border: 1px solid var(--edge); border-radius: 6px; cursor: pointer; user-select: none; font-size: 13.5px; }
+  .tag kbd { background: var(--bg); border: 1px solid var(--edge); border-radius: 4px; padding: 0 6px; font-size: 12px; color: var(--dim); min-width: 22px; text-align: center; }
+  .tag.on { background: var(--on); border-color: var(--on); }
+  .tag.on kbd { color: var(--fg); }
+  .tag .count { margin-left: auto; font-weight: 700; font-size: 13px; visibility: hidden; }
+  .tag.on .count { visibility: visible; }
+  textarea { background: var(--bg); color: var(--fg); border: 1px solid var(--edge); border-radius: 6px; padding: 7px; font: inherit; resize: vertical; min-height: 54px; }
+  textarea:focus { outline: 1px solid var(--accent); }
+  button { background: var(--accent); color: #08131c; border: 0; border-radius: 6px; padding: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+  .hint { color: var(--dim); font-size: 12px; }
+  .hint kbd { background: var(--bg); border: 1px solid var(--edge); border-radius: 3px; padding: 0 4px; }
+  #saved { color: var(--on); font-weight: 600; visibility: hidden; }
+  #done { display: none; text-align: center; font-size: 18px; color: var(--dim); }
+  #zonepanel { border: 1px solid var(--edge); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; color: var(--dim); }
+  #zonepanel h2 { font-size: 12.5px; color: var(--fg); margin-bottom: 4px; }
+  #zonepanel .flag { color: var(--warn); }
+  #zonepanel .areas b { color: var(--excl); }
+  #moved { background: var(--bg); color: var(--dim); border: 1px solid var(--edge); font-weight: 400; font-size: 12px; padding: 4px 8px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>hoseID review</h1>
+  <select id="fStatus">
+    <option value="unreviewed" selected>unreviewed</option>
+    <option value="reviewed">reviewed</option>
+    <option value="all">all</option>
+  </select>
+  <select id="fDevice"><option value="">all devices</option></select>
+  <select id="fSort">
+    <option value="conf" selected>MD conf ↓</option>
+    <option value="time_desc">newest first</option>
+    <option value="time_asc">oldest first</option>
+  </select>
+  <span id="progress"></span>
+</header>
+<main>
+  <div id="stage">
+    <div id="imgwrap">
+      <img id="photo" alt="">
+      <div id="meta"></div>
+    </div>
+    <div id="done">Queue empty — nothing left to review with these filters. 🎉</div>
+  </div>
+  <aside>
+    <div id="tags"></div>
+    <textarea id="notes" placeholder="notes… (n to focus, Esc to leave)"></textarea>
+    <button id="save">save &amp; next&nbsp;&nbsp;⏎</button>
+    <div id="zonepanel"></div>
+    <div class="hint">
+      letter = tag, again = +1, <kbd>⇧</kbd>+letter = −1 · <kbd>space</kbd> empty+next ·
+      <kbd>⏎</kbd> save+next · <kbd>←</kbd><kbd>→</kbd>/<kbd>z</kbd> nav ·
+      <kbd>x</kbd> boxes · <kbd>n</kbd> notes ·
+      click box = exclude it · <kbd>a</kbd> = exclude ALL boxes · click zone = remove
+    </div>
+    <div id="saved">saved ✓</div>
+  </aside>
+</main>
+<script>
+let PRESETS = [], NO_COUNT = [], CFG = {}, queue = [], pos = 0, showBoxes = true;
+let sel = new Map();                 // tag -> count
+let ZONES = {};                      // device_id -> active zones
+let SUPPRESSED = {};                 // device_id -> total suppressed count
+const $ = id => document.getElementById(id);
+const KEYMAP = {};
+const CATS = { '1': 'animal', '2': 'person', '3': 'vehicle' };
+
+async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function loadConfig() {
+  CFG = await api('/api/config');
+  PRESETS = CFG.preset_tags; NO_COUNT = CFG.no_count_tags;
+  PRESETS.forEach(p => KEYMAP[p.key] = p.tag);
+  $('tags').innerHTML = PRESETS.map(p =>
+    `<div class="tag" data-tag="${p.tag}"><kbd>${p.key}</kbd>${p.tag}<span class="count"></span></div>`
+  ).join('');
+  document.querySelectorAll('.tag').forEach(el => {
+    el.onclick = ev => bump(el.dataset.tag, ev.shiftKey ? -1 : 1);
+  });
+  const dv = $('fDevice');
+  CFG.devices.forEach(d => dv.add(new Option('…' + d.slice(-6), d)));
+}
+
+async function loadZones(device) {
+  ZONES[device] = (await api('/api/zones?device=' + device)).zones;
+  SUPPRESSED[device] = (await api('/api/suppressed?device=' + device)).total;
+}
+
+function isExcluded(det, zones) {
+  const [x, y, w, h] = det.bbox, cx = x + w / 2, cy = y + h / 2;
+  return zones.some(z => z.category === det.category &&
+    z.x <= cx && cx <= z.x + z.w && z.y <= cy && cy <= z.y + z.h);
+}
+
+function bump(t, delta) {
+  const noCount = NO_COUNT.includes(t);
+  if (delta > 0) {
+    if (t === 'empty') { sel.clear(); }
+    else { sel.delete('empty'); }
+    if (noCount) { sel.has(t) ? sel.delete(t) : sel.set(t, 1); }
+    else { sel.set(t, (sel.get(t) || 0) + 1); }
+  } else {
+    const n = (sel.get(t) || 0) - 1;
+    n > 0 ? sel.set(t, n) : sel.delete(t);
+  }
+  paintTags();
+}
+
+function paintTags() {
+  document.querySelectorAll('.tag').forEach(el => {
+    const t = el.dataset.tag, n = sel.get(t) || 0;
+    el.classList.toggle('on', n > 0);
+    el.querySelector('.count').textContent = n > 1 ? '×' + n : '';
+  });
+}
+
+async function loadQueue() {
+  const q = new URLSearchParams({
+    status: $('fStatus').value, device: $('fDevice').value, sort: $('fSort').value });
+  queue = (await api('/api/queue?' + q)).items;
+  pos = 0;
+  await refreshStats();
+  show();
+}
+
+async function refreshStats() {
+  const s = await api('/api/stats');
+  $('progress').innerHTML =
+    `queue <b>${Math.max(queue.length - pos, 0)}</b> · reviewed <b>${s.reviewed}</b>/${s.total}`;
+}
+
+async function show() {
+  const item = queue[pos];
+  $('done').style.display = item ? 'none' : 'block';
+  $('imgwrap').style.display = item ? 'block' : 'none';
+  if (!item) { $('zonepanel').innerHTML = ''; return; }
+  if (!(item.device_id in ZONES)) await loadZones(item.device_id);
+  sel = new Map();
+  if (item.review) item.review.tags.forEach(t =>
+    sel.set(t, (item.review.counts || {})[t] || 1));
+  $('notes').value = item.review ? item.review.notes : '';
+  paintTags();
+  const img = $('photo');
+  img.onload = () => drawBoxes(item);
+  img.src = '/images/' + encodeURI(item.image);
+  const zones = ZONES[item.device_id] || [];
+  const eff = Math.max(0, ...item.detections.filter(d => !isExcluded(d, zones)).map(d => d.conf));
+  const dt = (item.captured_at || '').replace('T', ' ');
+  $('meta').textContent =
+    `…${item.device_id.slice(-6)} · ${dt} · MD eff ${eff.toFixed(2)}` +
+    ` · ${pos + 1}/${queue.length}` + (item.review ? ' · previously reviewed' : '');
+  paintZonePanel(item.device_id);
+  if (queue[pos + 1]) { const p = new Image(); p.src = '/images/' + encodeURI(queue[pos + 1].image); }
+  refreshStats();
+}
+
+function paintZonePanel(device) {
+  const zones = ZONES[device] || [];
+  const areas = {};
+  zones.forEach(z => areas[z.category] = (areas[z.category] || 0) + z.w * z.h);
+  const areaStr = Object.entries(areas).map(([c, a]) =>
+    `${CATS[c]} <b>${(a * 100).toFixed(1)}%</b>`).join(' · ') || 'none';
+  const flag = (CFG.move_flags || {})[device];
+  $('zonepanel').innerHTML =
+    `<h2>exclusion zones — …${device.slice(-6)} (epoch ${CFG.epochs[device]})</h2>` +
+    `<div class="areas">excluded area: ${areaStr}</div>` +
+    `<div>${zones.length} zone(s) · suppressed ${SUPPRESSED[device] ?? '?'} detections all-time</div>` +
+    (flag ? `<div class="flag">⚠ possible camera move ${flag}</div>` : '') +
+    `<button id="moved">camera moved — retire zones (epoch +1)</button>`;
+  $('moved').onclick = async () => {
+    const reason = prompt(`Retire all active zones for …${device.slice(-6)}?\nOld zones stay in the DB, deactivated. Reason:`);
+    if (reason === null) return;
+    const r = await api('/api/epoch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: device, reason }) });
+    CFG.epochs[device] = r.epoch;
+    await loadZones(device);
+    drawBoxes(queue[pos]); paintZonePanel(device);
+  };
+}
+
+async function postZones(device, boxes, confirmed = false) {
+  const r = await api('/api/zones', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id: device, boxes, confirm: confirmed }) });
+  if (r.rejected.length) {
+    const desc = r.rejected.map(x =>
+      `${CATS[x.category]} zone would grow to ${(x.merged_area * 100).toFixed(0)}% of the frame`).join('\n');
+    if (confirm(`Growth cap exceeded:\n${desc}\n\nApply anyway?`)) {
+      await postZones(device, r.rejected.map(x => ({ category: x.category, bbox: x.bbox })), true);
+      return;
+    }
+  }
+  await loadZones(device);
+  drawBoxes(queue[pos]); paintZonePanel(device);
+}
+
+function drawBoxes(item) {
+  document.querySelectorAll('.box,.zone').forEach(b => b.remove());
+  if (!item) return;
+  const img = $('photo'), W = img.clientWidth, H = img.clientHeight;
+  const zones = ZONES[item.device_id] || [];
+  if (showBoxes) {
+    for (const z of zones) {
+      const el = document.createElement('div');
+      el.className = 'zone';
+      el.style.cssText = `left:${z.x * W}px;top:${z.y * H}px;width:${z.w * W}px;height:${z.h * H}px`;
+      el.innerHTML = `<span>excl ${CATS[z.category]}</span>`;
+      el.title = 'click to remove this exclusion zone';
+      el.onclick = async ev => {
+        ev.stopPropagation();
+        if (!confirm(`Remove this ${CATS[z.category]} exclusion zone?`)) return;
+        await api('/api/zones/' + z.id, { method: 'DELETE' });
+        await loadZones(item.device_id);
+        drawBoxes(item); paintZonePanel(item.device_id);
+      };
+      $('imgwrap').appendChild(el);
+    }
+    for (const d of item.detections) {
+      const [x, y, w, h] = d.bbox;
+      const excl = isExcluded(d, zones);
+      const el = document.createElement('div');
+      el.className = 'box' + (d.conf < 0.5 ? ' lowconf' : '') + (excl ? ' excl' : '');
+      el.style.cssText = `left:${x * W}px;top:${y * H}px;width:${w * W}px;height:${h * H}px`;
+      el.innerHTML = `<span>${CATS[d.category] || d.category} ${d.conf.toFixed(2)}${excl ? ' (excl)' : ''}</span>`;
+      el.title = excl ? 'already inside an exclusion zone'
+                      : `click to exclude ${CATS[d.category]} detections here`;
+      el.onclick = ev => {
+        ev.stopPropagation();
+        if (excl) return;
+        postZones(item.device_id, [{ category: d.category, bbox: d.bbox }]);
+      };
+      $('imgwrap').appendChild(el);
+    }
+  }
+}
+
+async function save(advance = true) {
+  const item = queue[pos];
+  if (!item || sel.size === 0) return;
+  const counts = {};
+  for (const [t, n] of sel) if (n > 1) counts[t] = n;
+  await api('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ basename: item.basename, tags: [...sel.keys()], counts, notes: $('notes').value }) });
+  item.review = { tags: [...sel.keys()], counts, notes: $('notes').value };
+  flashSaved();
+  if (advance) { pos++; show(); }
+}
+
+function flashSaved() {
+  $('saved').style.visibility = 'visible';
+  setTimeout(() => $('saved').style.visibility = 'hidden', 700);
+}
+
+document.addEventListener('keydown', ev => {
+  if (ev.target === $('notes')) {
+    if (ev.key === 'Escape') $('notes').blur();
+    if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); save(); }
+    return;
+  }
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const k = ev.key.toLowerCase();
+  if (KEYMAP[k]) { bump(KEYMAP[k], ev.shiftKey ? -1 : 1); }
+  else if (ev.key === ' ') { ev.preventDefault(); sel = new Map([['empty', 1]]); paintTags(); save(); }
+  else if (ev.key === 'Enter') { save(); }
+  else if (ev.key === 'ArrowRight') { if (pos < queue.length - 1) { pos++; show(); } }
+  else if (ev.key === 'ArrowLeft' || k === 'z') { if (pos > 0) { pos--; show(); } }
+  else if (k === 'x') { showBoxes = !showBoxes; drawBoxes(queue[pos]); }
+  else if (k === 'n') { ev.preventDefault(); $('notes').focus(); }
+  else if (k === 'a') {
+    const item = queue[pos];
+    if (!item) return;
+    const zones = ZONES[item.device_id] || [];
+    const boxes = item.detections.filter(d => !isExcluded(d, zones))
+      .map(d => ({ category: d.category, bbox: d.bbox }));
+    if (boxes.length) postZones(item.device_id, boxes);
+  }
+});
+
+$('save').onclick = () => save();
+['fStatus', 'fDevice', 'fSort'].forEach(id => $(id).onchange = loadQueue);
+window.addEventListener('resize', () => queue[pos] && drawBoxes(queue[pos]));
+
+loadConfig().then(loadQueue);
+</script>
+</body>
+</html>
