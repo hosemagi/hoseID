@@ -14,6 +14,8 @@ Alert policy (config [alerts] in credentials.toml, defaults below):
   - bear at detector conf >= bear_min_conf
   - person detections during night hours (family asleep; daytime people are
     usually family)
+  - notify_taxa: species worth a heads-up but not a page (e.g. wild_turkey),
+    sent at default priority
   - review-layer exclusion zones apply (the trampoline never pages anyone)
   - per (station, species) cooldown so a feeding bear is one alert, not forty
 
@@ -58,6 +60,7 @@ DEFAULTS = {
     "bear_min_conf": 0.5,
     "night_person": True,
     "night_hours": [22, 6],          # local, start/end
+    "notify_taxa": [],               # default-priority species alerts
     "cooldown_min": 30,
 }
 
@@ -185,6 +188,8 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
             elif (cfg["night_person"] and det["detector_class"] == "person"
                   and conf >= 0.5 and is_night):
                 reason, priority = "person (night)", "high"
+            elif taxon in cfg["notify_taxa"]:
+                reason, priority = taxon, "default"
             if reason is None:
                 continue
             key = f"{cap['station']}|{reason}"
@@ -198,7 +203,9 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
                    f"{_local_hhmm(cap['capture_time'])}"
                    + (" [VIDEO]" if cap["media_type"] == "video" else ""))
             emoji = ("lion" if "lion" in reason or "felid" in reason
-                     else "bear" if reason == "bear" else "rotating_light")
+                     else "bear" if reason == "bear"
+                     else "turkey" if "turkey" in reason
+                     else "rotating_light")
             if _notify(cfg, title, msg, priority, emoji,
                        _alert_image(det, digest)):
                 log(f"alerts: SENT [{priority}] {title}")

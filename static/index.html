@@ -65,6 +65,8 @@
     <option value="time_asc">oldest first</option>
   </select>
   <span id="progress"></span>
+  <button id="sync" style="margin-left:auto;padding:5px 10px"
+          title="reviews → wildlife log now (also runs nightly at 02:30)">sync log</button>
 </header>
 <main>
   <div id="stage">
@@ -358,6 +360,17 @@ document.addEventListener('keydown', ev => {
 });
 
 $('save').onclick = () => save();
+$('sync').onclick = async () => {
+  const b = $('sync');
+  b.blur();                          // keep space/enter on the review keymap
+  b.disabled = true; b.textContent = 'syncing…';
+  try {
+    const r = await api('/api/sync-wildlife', { method: 'POST' });
+    b.textContent = (r.output[0].match(/\d+ sightings added/) || ['synced ✓'])[0];
+  } catch (e) { b.textContent = 'sync failed'; console.error(e); }
+  b.disabled = false;
+  setTimeout(() => b.textContent = 'sync log', 6000);
+};
 ['fStatus', 'fDevice', 'fSort'].forEach(id => $(id).onchange = loadQueue);
 window.addEventListener('resize', () => queue[pos] && drawBoxes(queue[pos]));
 

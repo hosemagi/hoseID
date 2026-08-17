@@ -20,6 +20,7 @@ Exclusion zones are the ONE lossy layer in the pipeline, so they carry guards:
 import json
 import re
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -581,6 +582,31 @@ def review(r: ReviewIn):
              im["md_max_conf"], now_iso()),
         )
     return {"ok": True}
+
+
+@app.post("/api/sync-wildlife")
+def sync_wildlife():
+    """On-demand reviews → wildlife-log sync: the same scripts the 02:30
+    nightly runs (sync, weather, encounters), so a fresh review session can
+    land in the log without waiting for tonight."""
+    repo = Path(__file__).parent
+    py = repo / ".venv/bin/python"
+    output = []
+    for script, fatal in (("sync_wildlife_log.py", True),
+                          ("weather_backfill.py", False),
+                          ("build_encounters.py", False)):
+        args = [str(py), str(repo / "scripts" / script)]
+        if script == "build_encounters.py":
+            args += ["--gap-min", "90"]
+        r = subprocess.run(args, capture_output=True, text=True,
+                           timeout=300, cwd=str(repo))
+        if r.returncode != 0:
+            if fatal:
+                raise HTTPException(500, f"{script}: {r.stderr.strip()[-300:]}")
+            output.append(f"{script}: failed (non-fatal)")
+            continue
+        output.append(r.stdout.strip())
+    return {"ok": True, "output": output}
 
 
 @app.get("/images/{rel:path}")
