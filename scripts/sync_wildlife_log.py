@@ -137,7 +137,8 @@ def main() -> int:
                 f"*/**/{r['basename']}"))
             if hits:
                 media.append({"ref": asset_id, "path": str(hits[0]),
-                              "kind": "image"})
+                              "kind": "video" if hits[0].suffix == ".mp4"
+                              else "image"})
         if date is None:
             continue
 
