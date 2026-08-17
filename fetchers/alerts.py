@@ -194,7 +194,7 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
             state.set("alert_cooldowns", cooldowns)
             label = taxon.replace("_", " ") if taxon else det["detector_class"]
             title = f"{label} - {cap['station']}"
-            msg = (f"{label} at {cap['station']}, conf {conf:.2f}, "
+            msg = (f"{label} at {cap['station']}, {conf:.0%}, "
                    f"{_local_hhmm(cap['capture_time'])}"
                    + (" [VIDEO]" if cap["media_type"] == "video" else ""))
             emoji = ("lion" if "lion" in reason or "felid" in reason
