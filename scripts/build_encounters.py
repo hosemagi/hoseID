@@ -34,6 +34,18 @@ OUT_DB = Path.home() / "trailcam/derived/encounters.db"
 
 CONF_RANK = {"confirmed": 3, "assumed": 2, "by_elimination": 1, "unconfirmed": 0}
 
+# Encounters are reserved for the bigger, wide-ranging animals whose
+# cross-station movement is individually meaningful (P, 2026-08-16). Dense
+# multi-resident small game (squirrels, jackrabbits...) made chains that
+# merged different animals — e.g. a "squirrel encounter" hopping South
+# Clearing -> Storm Oak in 11 minutes. Small game stays sighting-level.
+ENCOUNTER_SPECIES = {
+    "deer", "bear", "mountain-lion", "coyote", "bobcat", "fox",
+    "turkey", "domestic-dog",
+}
+# Different stations within this window = structurally >1 animal.
+IMPOSSIBLE_TRAVEL_MIN = 3
+
 SCHEMA = """
 DROP TABLE IF EXISTS encounters;
 CREATE TABLE encounters (
@@ -46,6 +58,8 @@ CREATE TABLE encounters (
     duration_min  INTEGER NOT NULL,  -- capture-bracketed, not continuous presence
     n_sightings   INTEGER NOT NULL,
     max_count     INTEGER NOT NULL,  -- max simultaneous, never a sum
+    min_individuals INTEGER NOT NULL DEFAULT 1,  -- structural floor: simultaneous
+                                     -- counts / impossible cross-station travel
     stations      TEXT NOT NULL,     -- JSON ordered [station, ...] as visited
     n_stations    INTEGER NOT NULL,
     multi_cam     INTEGER NOT NULL,
@@ -70,12 +84,17 @@ def build(gap_min: int) -> dict:
     out.executescript(SCHEMA)
     gap = timedelta(minutes=gap_min)
     n_enc = 0
-    by_species: dict[str, list[dict]] = {}
+    by_group: dict[tuple, list[dict]] = {}
+    skipped_small = 0
     for r in rows:
+        if r["species"] not in ENCOUNTER_SPECIES:
+            skipped_small += 1
+            continue
         r["dt"] = datetime.fromisoformat(f"{r['date']}T{r['time']}")
-        by_species.setdefault(r["species"], []).append(r)
+        by_group.setdefault((r["species"],), []).append(r)
 
-    for species, srows in by_species.items():
+    for key, srows in by_group.items():
+        species = key[0]
         srows.sort(key=lambda r: r["dt"])
         chain: list[dict] = []
 
@@ -100,15 +119,24 @@ def build(gap_min: int) -> dict:
                     conf = min((m["individual_confidence"] or "unconfirmed"
                                 for m in named), key=lambda c: CONF_RANK.get(c, 0))
             dur = int((chain[-1]["dt"] - chain[0]["dt"]).total_seconds() // 60)
+            # structural minimum individuals: max simultaneous count, or
+            # distinct stations hit within the impossible-travel window
+            min_ind = max(m["count"] for m in chain)
+            win = timedelta(minutes=IMPOSSIBLE_TRAVEL_MIN)
+            for i, a in enumerate(chain):
+                near = {m["station"] for m in chain
+                        if abs((m["dt"] - a["dt"]).total_seconds()) <= win.total_seconds()}
+                min_ind = max(min_ind, len(near))
             out.execute(
                 "INSERT INTO encounters (species, individual,"
                 " individual_confidence, start_local, end_local, duration_min,"
-                " n_sightings, max_count, stations, n_stations, multi_cam,"
-                " sighting_ids, gap_min_used) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " n_sightings, max_count, min_individuals, stations,"
+                " n_stations, multi_cam, sighting_ids, gap_min_used)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (species, individual, conf,
                  chain[0]["dt"].strftime("%Y-%m-%d %H:%M"),
                  chain[-1]["dt"].strftime("%Y-%m-%d %H:%M"),
-                 dur, len(chain), max(m["count"] for m in chain),
+                 dur, len(chain), max(m["count"] for m in chain), min_ind,
                  json.dumps(stations), len(set(stations)),
                  int(len(set(stations)) > 1),
                  json.dumps([m["sighting_id"] for m in chain]), gap_min))
@@ -124,7 +152,8 @@ def build(gap_min: int) -> dict:
     out.execute("INSERT INTO meta VALUES ('built_at', datetime('now'))")
     out.execute("INSERT INTO meta VALUES ('gap_min', ?)", (str(gap_min),))
     out.commit()
-    return {"sightings": len(rows), "encounters": n_enc}
+    return {"sightings": len(rows), "encounters": n_enc,
+            "skipped_small_game": skipped_small}
 
 
 def main() -> int:
@@ -133,7 +162,8 @@ def main() -> int:
     args = ap.parse_args()
     stats = build(args.gap_min)
     print(f"encounters built: {stats['encounters']} from {stats['sightings']} "
-          f"timed sightings (gap {args.gap_min} min) -> {OUT_DB}")
+          f"timed sightings ({stats['skipped_small_game']} small-game rows "
+          f"excluded; gap {args.gap_min} min) -> {OUT_DB}")
     return 0
 
 
