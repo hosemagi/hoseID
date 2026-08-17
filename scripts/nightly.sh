@@ -11,3 +11,6 @@ status=$?
 .venv/bin/python scripts/sync_wildlife_log.py
 
 exit $status
+
+# Weather for any new sighting rows (fills NULLs only; two API calls)
+.venv/bin/python scripts/weather_backfill.py || true
