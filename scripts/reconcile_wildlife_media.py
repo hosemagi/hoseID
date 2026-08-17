@@ -47,7 +47,7 @@ FNAME_RE = re.compile(r"^\d{15}-\d+-\d+-(\d{14})-[A-Z]+\d+\.jpg$")
 
 
 def load_candidates():
-    """All media events: (local_dt, species_set, ref, path, kind)."""
+    """All media events: (local_dt, species_set, ref, path, kind, station)."""
     out = []
     tags = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
     tags.row_factory = sqlite3.Row
@@ -65,8 +65,10 @@ def load_candidates():
                       int(ts[8:10]), int(ts[10:12]), int(ts[12:14]))
         species = set(json.loads(r["tags"]))
         hits = list(ASSETS.glob(f"*/**/{base}"))
+        from sync_wildlife_log import DEVICE_STATION
         out.append((dt, species, f"legacy:{base}",
-                    str(hits[0]) if hits else "", "image"))
+                    str(hits[0]) if hits else "", "image",
+                    DEVICE_STATION.get(r["device_id"], "")))
 
     # Pipeline captures: species from human review when present, else taxon.
     if DETECTIONS_DB.exists():
@@ -96,12 +98,23 @@ def load_candidates():
             hits = list((ASSETS / digest[:2] / digest[2:4]).glob(f"{digest}.*"))
             kind = "video" if (cap["media_type"] if "media_type" in cap.keys()
                                else "image") == "video" else "image"
+            from sync_wildlife_log import normalize_station
             out.append((local, species, cap["asset_id"],
-                        str(hits[0]) if hits else "", kind))
+                        str(hits[0]) if hits else "", kind,
+                        normalize_station(cap["station"],
+                                          local.strftime("%Y-%m-%d"))))
     return out
 
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--window-min", type=int, default=TOLERANCE_MIN)
+    ap.add_argument("--require-station", action="store_true",
+                    help="wider windows must also match the station — for "
+                         "hand-logged times that drift from capture clocks")
+    args = ap.parse_args()
+
     wl = sqlite3.connect(WILDLIFE_DB)
     wl.row_factory = sqlite3.Row
     cols = {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}
@@ -110,7 +123,7 @@ def main() -> int:
                    " NOT NULL DEFAULT '[]'")
 
     candidates = load_candidates()
-    tol = timedelta(minutes=TOLERANCE_MIN)
+    tol = timedelta(minutes=args.window_min)
     matched = skipped = unmatched = 0
     unmatched_rows = []
     for s in wl.execute(
@@ -122,10 +135,13 @@ def main() -> int:
         want = COMPAT.get(s["species"], {s["species"]})
         base_dt = datetime.fromisoformat(f"{s['date']}T{s['time']}")
         refs = []
-        for dt, species, ref, path, kind in candidates:
-            if abs(dt - base_dt) <= tol and species & want:
-                refs.append({"ref": ref, "path": path, "kind": kind,
-                             "at": dt.strftime("%H:%M:%S")})
+        for dt, species, ref, path, kind, station in candidates:
+            if abs(dt - base_dt) > tol or not (species & want):
+                continue
+            if args.require_station and station != s["station"]:
+                continue
+            refs.append({"ref": ref, "path": path, "kind": kind,
+                         "at": dt.strftime("%H:%M:%S")})
         if refs:
             refs.sort(key=lambda x: x["at"])
             wl.execute("UPDATE sightings SET media_refs=? WHERE sighting_id=?",
