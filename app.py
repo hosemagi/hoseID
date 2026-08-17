@@ -90,6 +90,12 @@ def init_db():
             conn.execute(
                 "ALTER TABLE reviews ADD COLUMN counts TEXT NOT NULL DEFAULT '{}'"
             )
+        if "individual" not in cols:
+            # named-animal attribution at review time (Al/Ben/Boar...);
+            # confidence is mandatory whenever individual is set
+            conn.execute("ALTER TABLE reviews ADD COLUMN individual TEXT")
+            conn.execute("ALTER TABLE reviews ADD COLUMN"
+                         " individual_confidence TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS exclusion_zones (
                 id INTEGER PRIMARY KEY,
@@ -316,6 +322,8 @@ class ReviewIn(BaseModel):
     basename: str
     tags: list[str]
     counts: dict[str, int] = {}   # tag -> count, only for counts > 1
+    individual: str | None = None
+    individual_confidence: str | None = None
     notes: str = ""
 
 
@@ -343,6 +351,14 @@ def config():
     )
     with db() as conn:
         epochs = {d: current_epoch(conn, d) for d in devices}
+    individuals = []
+    wldb = Path("/Users/hosebot/trailcam/tags/wildlife.db")
+    if wldb.exists():
+        wconn = sqlite3.connect(f"file:{wldb}?mode=ro", uri=True)
+        individuals = [{"name": n, "species": sp} for n, sp in
+                       wconn.execute("SELECT name, species FROM individuals"
+                                     " ORDER BY name")]
+        wconn.close()
     return {
         "preset_tags": [{"tag": t, "key": k} for t, k in PRESET_TAGS],
         "no_count_tags": ["empty", "unsure"],
@@ -350,6 +366,7 @@ def config():
         "epochs": epochs,
         "max_zone_area_frac": MAX_ZONE_AREA_FRAC,
         "move_flags": move_flags,
+        "individuals": individuals,
     }
 
 
@@ -506,6 +523,8 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
         )
         item["review"] = (
             {"tags": json.loads(r["tags"]), "counts": json.loads(r["counts"]),
+             "individual": r["individual"],
+             "individual_confidence": r["individual_confidence"],
              "notes": r["notes"], "reviewed_at": r["reviewed_at"]} if r else None
         )
         items.append(item)
@@ -547,13 +566,18 @@ def review(r: ReviewIn):
     counts = {t: c for t, c in r.counts.items() if c > 1}
     if bad := set(counts) - set(r.tags):
         raise HTTPException(400, f"counts for untagged: {sorted(bad)}")
+    if r.individual and not r.individual_confidence:
+        raise HTTPException(400, "individual_confidence required when naming "
+                                 "an individual (a wrong name is worse than "
+                                 "no name)")
     with db() as conn:
         conn.execute(
             "INSERT INTO reviews (basename, image, device_id, captured_at,"
-            " tags, counts, notes, md_max_conf, reviewed_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            " tags, counts, individual, individual_confidence, notes,"
+            " md_max_conf, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (im["basename"], im["image"], im["device_id"], im["captured_at"],
-             json.dumps(sorted(r.tags)), json.dumps(counts), r.notes.strip(),
+             json.dumps(sorted(r.tags)), json.dumps(counts), r.individual,
+             r.individual_confidence, r.notes.strip(),
              im["md_max_conf"], now_iso()),
         )
     return {"ok": True}

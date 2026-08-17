@@ -79,6 +79,14 @@
   <aside>
     <div id="species" class="hint" style="display:none"></div>
     <div id="tags"></div>
+    <div style="display:flex;gap:6px">
+      <select id="indiv" style="flex:1;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
+        <option value="">individual: none</option></select>
+      <select id="indivConf" style="flex:1;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
+        <option value="">confidence…</option><option>confirmed</option>
+        <option>assumed</option><option>by_elimination</option>
+        <option>unconfirmed</option></select>
+    </div>
     <textarea id="notes" placeholder="notes… (n to focus, Esc to leave)"></textarea>
     <button id="save">save &amp; next&nbsp;&nbsp;⏎</button>
     <div id="zonepanel"></div>
@@ -114,6 +122,8 @@ async function loadConfig() {
   });
   const dv = $('fDevice');
   CFG.devices.forEach(d => dv.add(new Option('…' + d.slice(-6), d)));
+  (CFG.individuals || []).forEach(i =>
+    $('indiv').add(new Option(`${i.name} (${i.species})`, i.name)));
 }
 
 async function loadZones(device) {
@@ -174,6 +184,8 @@ async function show() {
   if (item.review) item.review.tags.forEach(t =>
     sel.set(t, (item.review.counts || {})[t] || 1));
   $('notes').value = item.review ? item.review.notes : '';
+  $('indiv').value = (item.review && item.review.individual) || '';
+  $('indivConf').value = (item.review && item.review.individual_confidence) || '';
   paintTags();
   if (item.species && item.species.length) {
     const best = {};
@@ -300,9 +312,17 @@ async function save(advance = true) {
   if (!item || sel.size === 0) return;
   const counts = {};
   for (const [t, n] of sel) if (n > 1) counts[t] = n;
+  if ($('indiv').value && !$('indivConf').value) {
+    alert('Naming an individual requires a confidence level.'); return;
+  }
+  const body = { basename: item.basename, tags: [...sel.keys()], counts,
+    individual: $('indiv').value || null,
+    individual_confidence: $('indivConf').value || null,
+    notes: $('notes').value };
   await api('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ basename: item.basename, tags: [...sel.keys()], counts, notes: $('notes').value }) });
-  item.review = { tags: [...sel.keys()], counts, notes: $('notes').value };
+    body: JSON.stringify(body) });
+  item.review = { tags: [...sel.keys()], counts, notes: $('notes').value,
+    individual: body.individual, individual_confidence: body.individual_confidence };
   flashSaved();
   if (advance) { pos++; show(); }
 }

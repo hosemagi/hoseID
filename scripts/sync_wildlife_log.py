@@ -158,6 +158,9 @@ def main() -> int:
             continue
 
         counts = json.loads(r["counts"] or "{}")
+        cols = r.keys()
+        indiv = r["individual"] if "individual" in cols else None
+        indiv_conf = r["individual_confidence"] if "individual_confidence" in cols else None
         for sp in sorted(species_tags):
             dup = wl.execute(
                 "SELECT 1 FROM sightings WHERE capture_asset_id=? AND species=?",
@@ -174,11 +177,12 @@ def main() -> int:
                                   else "image"})
             wl.execute(
                 "INSERT INTO sightings (date, time, station, species, count,"
-                " source, category, capture_asset_id, auto, notes, media_refs)"
-                " VALUES (?,?,?,?,?,?,?,?,1,?,?)",
+                " source, category, capture_asset_id, auto, individual,"
+                " individual_confidence, notes, media_refs)"
+                " VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?)",
                 (date, time, station, sp, counts.get(sp, 1), "camera",
-                 CATEGORY.get(sp, "other"), asset_id, r["notes"] or "",
-                 json.dumps(media)))
+                 CATEGORY.get(sp, "other"), asset_id, indiv, indiv_conf,
+                 r["notes"] or "", json.dumps(media)))
             added += 1
 
     wl.execute("INSERT OR REPLACE INTO meta VALUES ('review_watermark', ?)",

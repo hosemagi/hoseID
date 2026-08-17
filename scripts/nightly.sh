@@ -23,3 +23,6 @@ status=$?
 .venv/bin/python scripts/weather_backfill.py || true
 
 exit $status
+
+# Rebuild derived encounters (wholesale; gap threshold is retunable)
+.venv/bin/python scripts/build_encounters.py --gap-min 90 || true
