@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from fetchers import alerts  # noqa: E402
 from fetchers import reveal as reveal_mod  # noqa: E402
 from fetchers.arlo import ArloFetcher  # noqa: E402
 from fetchers.common import State, load_config, log, notify  # noqa: E402
@@ -69,31 +70,43 @@ def main() -> int:
     failures = {"reveal": 0, "arlo": 0}
     next_run = {"reveal": 0.0, "arlo": 0.0}
 
-    def run_source(name: str, fn) -> None:
+    def run_source(name: str, fn) -> list[str]:
         try:
-            fn()
+            new = fn() or []
             failures[name] = 0
+            return new
         except Exception as e:
             failures[name] += 1
             log(f"{name}: ERROR ({failures[name]} consecutive): "
                 f"{type(e).__name__}: {e}")
             if failures[name] == FAILURE_ALERT_THRESHOLD:
                 notify(cfg, f"hoseid-fetch: {name} failing repeatedly: {e}")
+            return []
 
     log(f"hoseid-fetch up (reveal every {reveal_interval}s, "
         f"arlo sweep every {arlo_interval}s + event-driven)")
 
     while True:
         now = time.time()
+        fresh: list[str] = []
         if now >= next_run["reveal"]:
-            run_source("reveal", lambda: reveal_mod.poll(reveal, state))
+            fresh += run_source("reveal", lambda: reveal_mod.poll(reveal, state))
             next_run["reveal"] = now + reveal_interval
         if now >= next_run["arlo"] or arlo.sweep_wanted.is_set():
             if arlo.sweep_wanted.is_set():
                 arlo.sweep_wanted.clear()
                 time.sleep(20)   # debounce: let the clip finish uploading
-            run_source("arlo", arlo.sweep)
+            fresh += run_source("arlo", arlo.sweep)
             next_run["arlo"] = time.time() + arlo_interval
+        if fresh:
+            # Real-time path: analyze the new captures now, alert if warranted.
+            try:
+                if alerts.run_pipeline_incremental():
+                    n = alerts.check_and_alert(cfg, state, fresh)
+                    log(f"alerts: {len(fresh)} fresh capture(s) analyzed, "
+                        f"{n} alert(s)")
+            except Exception as e:
+                log(f"alerts: ERROR {type(e).__name__}: {e}")
         if args.once:
             break
         # wake early for arlo events, otherwise tick towards the next poll

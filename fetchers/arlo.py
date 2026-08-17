@@ -77,10 +77,11 @@ class ArloFetcher:
             log(f"arlo: event {attr} from {device.name!r} -> sweep scheduled")
             self.sweep_wanted.set()
 
-    def sweep(self) -> int:
+    def sweep(self) -> list[str]:
         """Download every cloud recording newer than each camera's cursor."""
         cursors = self._state.get("arlo_cursors", {})
         ingested = 0
+        new_assets: list[str] = []
         for cam in self._arlo.cameras:
             cur = cursors.get(cam.device_id, 0)
             for vid in reversed(cam.last_n_videos(50) or []):
@@ -95,14 +96,17 @@ class ArloFetcher:
                     log(f"arlo: EMPTY download {name}; will retry next sweep")
                     notify(self._cfg, f"hoseid-fetch: empty Arlo download {name}")
                     continue
-                ingested += self._ingest_video(cam, vid, tmp, created_ms)
+                aid = self._ingest_video(cam, vid, tmp, created_ms)
+                if aid:
+                    ingested += 1
+                    new_assets.append(aid)
                 cursors[cam.device_id] = created_ms
                 self._state.set("arlo_cursors", cursors)
         if ingested:
             log(f"arlo: sweep ingested {ingested} recording(s)")
-        return ingested
+        return new_assets
 
-    def _ingest_video(self, cam, vid, tmp: Path, created_ms: int) -> int:
+    def _ingest_video(self, cam, vid, tmp: Path, created_ms: int) -> str | None:
         from hoseid.video import probe_safe
         meta, err = probe_safe(tmp)
         video_fields = dict(
@@ -126,7 +130,7 @@ class ArloFetcher:
                                 "content_type": vid.content_type},
             **video_fields,
         ))
-        return 0 if result.already_present else 1
+        return None if result.already_present else result.asset_id
 
     def bootstrap_cursors(self) -> None:
         """First run: point cursors at the newest existing recordings so we

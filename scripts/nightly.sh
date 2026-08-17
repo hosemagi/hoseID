@@ -5,7 +5,15 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-.venv/bin/hoseid run --run-id nightly --threshold 0.1
+# Serialize against the daemon's real-time alert pipeline (macOS has no
+# flock(1); use a python fcntl wrapper on the shared lock file).
+.venv/bin/python - <<'PYEOF'
+import fcntl, subprocess, sys
+lock = open("/Users/hosebot/trailcam/derived/.pipeline.lock", "w")
+fcntl.flock(lock, fcntl.LOCK_EX)
+sys.exit(subprocess.call([".venv/bin/hoseid", "run", "--run-id", "nightly",
+                          "--threshold", "0.1"]))
+PYEOF
 status=$?
 
 # Log sync runs even if the pipeline pass failed — reviews may still be new.

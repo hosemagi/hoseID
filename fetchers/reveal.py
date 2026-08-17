@@ -96,7 +96,7 @@ def _capture_time(item: dict) -> datetime:
                     tzinfo=PROPERTY_TZ)
 
 
-def poll(client: RevealClient, state: State) -> int:
+def poll(client: RevealClient, state: State) -> list[str]:
     """One poll pass: fetch photos newer than the cursor, ingest, advance.
 
     Cursor is the vendor createdTimestamp (ms epoch) of the newest ingested
@@ -110,7 +110,7 @@ def poll(client: RevealClient, state: State) -> int:
         cursor = newest[0]["createdTimestamp"] if newest else 0
         state.set("reveal_cursor_ms", cursor)
         log(f"reveal: bootstrapped cursor to {cursor}")
-        return 0
+        return []
 
     new_items: list[dict] = []
     page = 0
@@ -123,6 +123,7 @@ def poll(client: RevealClient, state: State) -> int:
         page += 1
 
     ingested = 0
+    new_assets: list[str] = []
     for item in sorted(new_items, key=lambda p: p["createdTimestamp"]):
         pid = item["photoId"]
         tmp = download(item["photoUrl"], TMP_DIR / pid)
@@ -147,9 +148,11 @@ def poll(client: RevealClient, state: State) -> int:
             trigger_type="motion",
             raw_vendor_payload=item,
         ))
-        ingested += 0 if result.already_present else 1
+        if not result.already_present:
+            ingested += 1
+            new_assets.append(result.asset_id)
         state.set("reveal_cursor_ms", item["createdTimestamp"])
     if new_items:
         log(f"reveal: {len(new_items)} new, {ingested} ingested "
             f"({len(new_items) - ingested} already present)")
-    return ingested
+    return new_assets
