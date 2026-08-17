@@ -79,12 +79,25 @@ def start_run(conn: sqlite3.Connection, *, run_id: str, started_at: str,
               geofence_country: str | None = None, geofence_admin1: str | None = None,
               taxon_map_version: str | None = None, notes: str | None = None,
               sampling_policy: str | None = None) -> None:
+    # UPSERT, never REPLACE: captures/detections cascade on runs deletion, so
+    # `INSERT OR REPLACE` silently wiped a run's prior work whenever the same
+    # run_id was started again — turning the standing incremental run
+    # (run_id='nightly') into a full reprocess of the landing zone each night.
+    # Re-starting a run keeps its rows and original started_at; the mutable
+    # provenance fields update to the current invocation.
     conn.execute(
-        """INSERT OR REPLACE INTO runs
+        """INSERT INTO runs
            (run_id, started_at, detector_model, detector_version, classifier_model,
             classifier_version, geofence_country, geofence_admin1, detector_threshold,
             taxon_map_version, notes, sampling_policy)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(run_id) DO UPDATE SET
+             detector_model=excluded.detector_model,
+             detector_version=excluded.detector_version,
+             detector_threshold=excluded.detector_threshold,
+             notes=excluded.notes,
+             sampling_policy=excluded.sampling_policy,
+             finished_at=NULL""",
         (run_id, started_at, detector_model, detector_version, classifier_model,
          classifier_version, geofence_country, geofence_admin1, detector_threshold,
          taxon_map_version, notes, sampling_policy))

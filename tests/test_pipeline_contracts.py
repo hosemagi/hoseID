@@ -32,9 +32,18 @@ def test_mule_deer_maps_to_blacktail():
     assert "hemionus" in r.taxon_raw, "taxon_raw must always be retained"
 
 
-def test_genus_level_deer_maps_to_deer_unspecified_not_dropped():
+def test_genus_level_deer_takes_the_blacktail_property_prior():
+    # taxon_map v3 (P, 2026-08-16): the only deer at 95959 are blacktail, so
+    # genus/family/order rollups all map to blacktail rather than
+    # deer_unspecified. A species-level whitetail call still surfaces as
+    # whitetail (anomaly signal) — pinned separately below.
     r = map_taxon(_raw("odocoileus", "", "odocoileus species", "cetartiodactyla", "cervidae"), 0.5)
-    assert r.taxon == "deer_unspecified"
+    assert r.taxon == "blacktail"
+
+
+def test_species_level_whitetail_stays_distinct_despite_the_prior():
+    r = map_taxon(_raw("odocoileus", "virginianus", "white-tailed deer"), 0.9)
+    assert r.taxon == "whitetail", "geofence-anomaly signal must not be folded"
 
 
 def test_mountain_lion_maps_and_is_always_high_priority():
@@ -176,7 +185,10 @@ def test_family_rollup_of_deer_keeps_deer_meaning():
     """A whitetail in CA is geofenced to 'cervidae family'. That must not become unknown_mammal --
     the classifier was confident it was a deer and only declined the species."""
     r = map_taxon(_rollup("cervidae", "cervidae family", order="cetartiodactyla"), 0.95)
-    assert r.taxon == "deer_unspecified"
+    # taxon_map v3: the family rollup takes the blacktail property prior; the
+    # invariant this test protects is unchanged — a confident deer must never
+    # degrade to unknown_mammal.
+    assert r.taxon == "blacktail"
 
 
 def test_family_rollup_of_cat_is_high_priority():
