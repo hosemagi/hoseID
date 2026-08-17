@@ -27,6 +27,8 @@ import json
 import sqlite3
 import subprocess
 import time
+import zoneinfo
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -39,6 +41,14 @@ TAGS_DB = Path.home() / "trailcam/tags/tags.db"
 CROPS = Path.home() / "trailcam/derived/crops"
 ASSETS = Path.home() / "trailcam/landing/assets"
 PIPELINE_LOCK = Path.home() / "trailcam/derived/.pipeline.lock"
+LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
+
+
+def _local_hhmm(capture_time_iso: str) -> str:
+    t = datetime.fromisoformat(capture_time_iso)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.astimezone(LOCAL_TZ).strftime("%H:%M")
 
 DEFAULTS = {
     "ntfy_server": "https://ntfy.sh",
@@ -185,7 +195,7 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
             label = taxon.replace("_", " ") if taxon else det["detector_class"]
             title = f"{label} - {cap['station']}"
             msg = (f"{label} at {cap['station']}, conf {conf:.2f}, "
-                   f"{cap['capture_time'][11:16]} UTC"
+                   f"{_local_hhmm(cap['capture_time'])}"
                    + (" [VIDEO]" if cap["media_type"] == "video" else ""))
             emoji = ("lion" if "lion" in reason or "felid" in reason
                      else "bear" if reason == "bear" else "rotating_light")
