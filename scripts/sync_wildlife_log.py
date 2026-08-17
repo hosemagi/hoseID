@@ -37,8 +37,48 @@ CATEGORY = {
     "jackrabbit": "small_game", "squirrel": "small_game", "skunk": "small_game",
 }
 
+# P's device->station mapping (2026-08-16) for the legacy Reveal corpus,
+# whose reviews carry only a device id. Mirrors ~/trailcam/landing/stations.json.
+DEVICE_STATION = {
+    "016579006078088": "Storm Oak",
+    "016579006023894": "South Clearing",
+    "016579006127489": "Bench",
+    "016579006157692": "North Oak",
+}
+
+
+def normalize_station(name: str) -> str:
+    """Arlo camera names -> log station names ('Cabin - Yard' -> 'Cabin Yard',
+    'Cabin - Crossroads' -> 'Crossroads'); unknown names pass through."""
+    if name == "Cabin - Yard":
+        return "Cabin Yard"
+    if name.startswith("Cabin - "):
+        return name[len("Cabin - "):]
+    return DEVICE_STATION.get(name, name)
+
+
+def claimed_refs(wl: sqlite3.Connection) -> set[str]:
+    """Every media ref already represented by an existing sighting — either
+    as capture_asset_id or inside media_refs (curated entries linked by the
+    reconciliation pass). Backfill must not re-enter those captures."""
+    out = set()
+    for r in wl.execute("SELECT capture_asset_id, media_refs FROM sightings"):
+        if r["capture_asset_id"]:
+            out.add(r["capture_asset_id"])
+        for ref in json.loads(r["media_refs"] or "[]"):
+            if ref.get("ref"):
+                out.add(ref["ref"])
+    return out
+
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--backfill", action="store_true",
+                    help="process ALL reviews (ignore watermark), skipping "
+                         "captures already claimed by existing sightings")
+    args = ap.parse_args()
+
     wl = sqlite3.connect(WILDLIFE_DB)
     wl.row_factory = sqlite3.Row
     if "media_refs" not in {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}:
@@ -54,9 +94,11 @@ def main() -> int:
     row = wl.execute("SELECT value FROM meta WHERE key='review_watermark'").fetchone()
     watermark = int(row["value"]) if row else 0
 
+    since = 0 if args.backfill else watermark
+    claimed = claimed_refs(wl) if args.backfill else set()
     reviews = tags.execute(
-        "SELECT * FROM reviews WHERE id > ? ORDER BY id", (watermark,)).fetchall()
-    added = 0
+        "SELECT * FROM reviews WHERE id > ? ORDER BY id", (since,)).fetchall()
+    added = skipped_claimed = 0
     max_id = watermark
     for r in reviews:
         max_id = max(max_id, r["id"])
@@ -64,26 +106,38 @@ def main() -> int:
         if not species_tags:
             continue
         digest = Path(r["basename"]).stem
-        asset_id = f"sha256:{digest}" if len(digest) == 64 else None
+        if len(digest) == 64:
+            asset_id = f"sha256:{digest}"
+        else:
+            asset_id = f"legacy:{r['basename']}"   # Reveal batch archive
+        if asset_id in claimed:
+            skipped_claimed += 1
+            continue
 
         station, date, time = None, None, None
-        if asset_id and det:
+        media = []
+        if asset_id.startswith("sha256:") and det:
             cap = det.execute(
                 "SELECT station, capture_time FROM captures WHERE asset_id=? "
                 "ORDER BY rowid DESC LIMIT 1", (asset_id,)).fetchone()
             if cap:
-                station = cap["station"]
+                station = normalize_station(cap["station"])
                 t = datetime.fromisoformat(cap["capture_time"])
                 if t.tzinfo is None:
                     t = t.replace(tzinfo=timezone.utc)
                 local = t.astimezone(LOCAL_TZ)
                 date, time = local.strftime("%Y-%m-%d"), local.strftime("%H:%M")
         if station is None:
-            # legacy-corpus basename: station unknown to this sync; fall back
-            # to review metadata (device id) and the review's captured_at
-            station = r["device_id"] or "unknown"
+            # legacy-corpus basename: station from the device mapping,
+            # time from the review's captured_at (filename-derived, local)
+            station = DEVICE_STATION.get(r["device_id"], r["device_id"] or "unknown")
             if r["captured_at"]:
                 date, time = r["captured_at"][:10], r["captured_at"][11:16]
+            hits = list((Path.home() / "trailcam/landing/assets").glob(
+                f"*/**/{r['basename']}"))
+            if hits:
+                media.append({"ref": asset_id, "path": str(hits[0]),
+                              "kind": "image"})
         if date is None:
             continue
 
@@ -94,8 +148,7 @@ def main() -> int:
                 (asset_id, sp)).fetchone() if asset_id else None
             if dup:
                 continue
-            media = []
-            if asset_id:
+            if not media and asset_id.startswith("sha256:"):
                 digest = asset_id.split(":", 1)[1]
                 hits = list((Path.home() / "trailcam/landing/assets" /
                              digest[:2] / digest[2:4]).glob(f"{digest}.*"))
@@ -115,8 +168,9 @@ def main() -> int:
     wl.execute("INSERT OR REPLACE INTO meta VALUES ('review_watermark', ?)",
                (str(max_id),))
     wl.commit()
-    print(f"wildlife-log sync: {len(reviews)} new reviews, {added} sightings added, "
-          f"watermark {watermark} -> {max_id}")
+    extra = f", {skipped_claimed} skipped (already in log)" if args.backfill else ""
+    print(f"wildlife-log sync: {len(reviews)} reviews scanned, {added} sightings "
+          f"added{extra}, watermark {watermark} -> {max_id}")
     return 0
 
 
