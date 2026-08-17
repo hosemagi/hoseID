@@ -25,6 +25,13 @@ TAGS_DB = Path.home() / "trailcam/tags/tags.db"
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
 LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
+
+def local_date(capture_time_iso: str) -> str:
+    t = datetime.fromisoformat(capture_time_iso)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
+
 ANIMAL_TAGS = {
     "deer", "bear", "mountain-lion", "coyote", "bobcat", "fox", "skunk",
     "turkey", "jackrabbit", "squirrel", "bird", "domestic-dog", "other-animal",
@@ -47,9 +54,17 @@ DEVICE_STATION = {
 }
 
 
-def normalize_station(name: str) -> str:
+def normalize_station(name: str, date: str | None = None) -> str:
     """Arlo camera names -> log station names ('Cabin - Yard' -> 'Cabin Yard',
-    'Cabin - Crossroads' -> 'Crossroads'); unknown names pass through."""
+    'Cabin - Crossroads' -> 'Crossroads'); unknown names pass through.
+
+    The camera still named 'Madrone' in Arlo IS the log's Trailer station
+    (P, 2026-08-16: rename never happened after the 07/25 relocation).
+    Pre-07/25 captures from it are the prior spot — different ground — per
+    the log's own caveat. The camera named 'Trailer' in Arlo also watches
+    the trailer (two cameras, one station)."""
+    if name == "Cabin - Madrone":
+        return "Trailer" if (date is None or date >= "2026-07-25")             else "Madrone (old spot)"
     if name == "Cabin - Yard":
         return "Cabin Yard"
     if name.startswith("Cabin - "):
@@ -121,7 +136,7 @@ def main() -> int:
                 "SELECT station, capture_time FROM captures WHERE asset_id=? "
                 "ORDER BY rowid DESC LIMIT 1", (asset_id,)).fetchone()
             if cap:
-                station = normalize_station(cap["station"])
+                station = normalize_station(cap["station"], local_date(cap["capture_time"]))
                 t = datetime.fromisoformat(cap["capture_time"])
                 if t.tzinfo is None:
                     t = t.replace(tzinfo=timezone.utc)

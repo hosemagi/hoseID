@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sync_wildlife_log import normalize_station  # noqa: E402
+from sync_wildlife_log import local_date, normalize_station  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
@@ -32,7 +32,7 @@ def main() -> int:
     fixed = unresolved = 0
     new_stations = set()
     for s in wl.execute(
-            "SELECT sighting_id, station, capture_asset_id FROM sightings "
+            "SELECT sighting_id, station, capture_asset_id, date FROM sightings "
             "WHERE station NOT IN (SELECT name FROM stations)"):
         station = None
         if s["capture_asset_id"] and s["capture_asset_id"].startswith("sha256:"):
@@ -40,7 +40,7 @@ def main() -> int:
                 "SELECT station FROM captures WHERE asset_id=? "
                 "ORDER BY rowid DESC LIMIT 1", (s["capture_asset_id"],)).fetchone()
             if cap:
-                station = normalize_station(cap["station"])
+                station = normalize_station(cap["station"], s["date"])
         if station is None:
             # Arlo names are already real station names, just unregistered
             if not s["station"] or s["station"].isupper() and len(s["station"]) == 13:
