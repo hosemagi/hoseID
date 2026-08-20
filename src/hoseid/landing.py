@@ -166,18 +166,27 @@ class CheckReport:
     n_assets_present: int = 0
     invalid: list[tuple[str, str]] = None          # (path, error)
     missing_asset: list[str] = None                # asset_id
-    orphan_assets: list[str] = None                # asset files with no sidecar
+    orphan_assets: list[str] = None                # asset files with no sidecar, unaccounted for
     digest_mismatch: list[str] = None              # content no longer matches asset_id
     untrusted_time: list[str] = None               # informational, not a failure
+    # Files sitting in the landing zone under a vendor-supplied name whose bytes ARE already
+    # ingested content-addressed. A layout wart rather than data at risk: nothing is unaccounted
+    # for, the copies are redundant, and deleting one loses nothing. Split out from orphan_assets
+    # because conflating the two made `check` fail with 1,726 entries that looked like missing
+    # data and were actually already-safe duplicates -- a failure nobody could act on, so nobody
+    # did. A genuinely unaccounted file still fails the check.
+    staged_duplicates: list[str] = None
 
     def __post_init__(self):
-        for f in ("invalid", "missing_asset", "orphan_assets", "digest_mismatch", "untrusted_time"):
+        for f in ("invalid", "missing_asset", "orphan_assets", "digest_mismatch",
+                  "untrusted_time", "staged_duplicates"):
             if getattr(self, f) is None:
                 setattr(self, f, [])
 
     @property
     def ok(self) -> bool:
-        return not (self.invalid or self.missing_asset or self.orphan_assets or self.digest_mismatch)
+        return not (self.invalid or self.missing_asset or self.orphan_assets
+                    or self.digest_mismatch)
 
 
 def check_landing_zone(*, verify_digests: bool = False) -> CheckReport:
@@ -210,9 +219,23 @@ def check_landing_zone(*, verify_digests: bool = False) -> CheckReport:
     ad = paths.assets_dir()
     if ad.exists():
         for p in ad.rglob("*"):
-            if p.is_file() and not p.name.startswith(".tmp-"):
-                if p.stem not in seen:
-                    rep.orphan_assets.append(p.stem)
+            if not p.is_file() or p.name.startswith(".tmp-") or p.stem in seen:
+                continue
+            # One hash per orphan, bounded by the orphan count rather than the library size, so
+            # this stays cheap on a healthy zone (where there are none) and only costs anything
+            # in exactly the case worth paying to diagnose.
+            try:
+                digest = compute_asset_id(p).split(":", 1)[1]
+            except OSError:
+                rep.orphan_assets.append(p.stem)
+                continue
+            # Both halves matter. A sidecar alone is not enough: if the content-addressed asset
+            # is missing, this staged file is the ONLY copy of those bytes and calling it a
+            # redundant duplicate would invite deleting the last copy.
+            if digest in seen and find_asset(f"sha256:{digest}") is not None:
+                rep.staged_duplicates.append(str(p.relative_to(ad)))
+            else:
+                rep.orphan_assets.append(p.stem)
     return rep
 
 

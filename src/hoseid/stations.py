@@ -26,6 +26,12 @@ class Station:
     active_from: str | None = None
     active_to: str | None = None
     notes: str | None = None
+    # The camera serial currently at this station. Optional because the registry predates it and
+    # the Arlo cameras are keyed through station_overrides instead. It is what lets a bulk vendor
+    # export -- whose only station signal is the serial in each filename -- be ingested under the
+    # right station without a human labelling every file.
+    device_id: str | None = None
+    vendor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,8 +59,28 @@ def load_stations(path: Path | None = None) -> dict[str, Station]:
         out[entry["name"]] = Station(
             name=entry["name"], lat=entry.get("lat"), lon=entry.get("lon"),
             active_from=entry.get("active_from"), active_to=entry.get("active_to"),
-            notes=entry.get("notes"),
+            notes=entry.get("notes"), device_id=entry.get("device_id"),
+            vendor=entry.get("vendor"),
         )
+    return out
+
+
+def by_device(path: Path | None = None) -> dict[str, Station]:
+    """Serial -> station, for sources whose only station signal is the camera serial.
+
+    Raises on a duplicate serial rather than picking one: two stations claiming the same camera
+    is a registry error that would otherwise silently mis-attribute every capture from it, and
+    station attribution is the thing corridor analysis rests on.
+    """
+    out: dict[str, Station] = {}
+    for st in load_stations(path).values():
+        if not st.device_id:
+            continue
+        if st.device_id in out:
+            raise ValueError(
+                f"device_id {st.device_id} claimed by both '{out[st.device_id].name}' and "
+                f"'{st.name}' in the station registry; resolve before ingesting")
+        out[st.device_id] = st
     return out
 
 
