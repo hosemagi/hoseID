@@ -47,7 +47,10 @@
       "note": "'bird' is the only preset for every non-turkey bird, so it has to cover the quail taxa too. Turkey has its own tag and is scored separately."
     },
     "domestic-dog": {"taxa": ["domestic_dog"]},
-    "person": {"taxa": ["human"]},
+    "person": {
+      "taxa": ["human"],
+      "note": "Read person precision with care. Of the captures where the detector found a person, 26 are tagged vehicle-only -- a car arriving has a driver, and the reviewer tags the salient subject rather than exhaustively enumerating occupants. So a vehicle-only verdict is NOT a reliable assertion that no person was present, and some of what scores as a person false positive is under-tagging rather than detector error. The complete-verdict assumption (invariant 9) holds for the wildlife question it was built for; it is weakest exactly here."
+    },
     "vehicle": {"taxa": ["vehicle"]}
   },
 
