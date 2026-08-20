@@ -72,13 +72,47 @@ def tags(create: bool = True):
         conn.close()
 
 
+class RunProvenanceConflict(RuntimeError):
+    """A standing run was resumed on terms that would silently mix two populations."""
+
+
 def start_run(conn: sqlite3.Connection, *, run_id: str, started_at: str,
               detector_model: str, detector_version: str,
               detector_threshold: float,
               classifier_model: str | None = None, classifier_version: str | None = None,
               geofence_country: str | None = None, geofence_admin1: str | None = None,
               taxon_map_version: str | None = None, notes: str | None = None,
-              sampling_policy: str | None = None) -> None:
+              sampling_policy: str | None = None,
+              allow_provenance_change: bool = False) -> None:
+    # Resuming a standing run at different detector terms silently mixes two populations under
+    # one run_id, and the UPSERT below then rewrites the run row to the NEW terms -- so the
+    # provenance record ends up describing rows that were never produced that way. Invariant 2
+    # says every derived record carries the model identity that produced it; that guarantee is
+    # worth nothing if the identity can be quietly overwritten.
+    #
+    # This is not hypothetical. The CLI's default threshold is 0.2 and the nightly runs at 0.1,
+    # so `hoseid run --run-id nightly` with no flag is a one-word slip away. Measured on P's own
+    # labels, it also matters: every bobcat capture on this property sits at detector confidence
+    # 0.114-0.135, so a resume at 0.2 would erase the species from the record entirely while
+    # reporting a healthy-looking run.
+    prior = conn.execute(
+        "SELECT detector_model, detector_version, detector_threshold FROM runs WHERE run_id=?",
+        (run_id,)).fetchone()
+    if prior is not None and not allow_provenance_change:
+        changed = {
+            k: (prior[k], new) for k, new in (
+                ("detector_model", detector_model),
+                ("detector_version", detector_version),
+                ("detector_threshold", detector_threshold))
+            if prior[k] != new
+        }
+        if changed:
+            raise RunProvenanceConflict(
+                f"run '{run_id}' already exists on different detector terms: "
+                + "; ".join(f"{k} {old!r} -> {new!r}" for k, (old, new) in changed.items())
+                + ". Resuming would mix two populations under one run_id and overwrite the "
+                  "provenance row. Use the original terms, or start a new run_id.")
+
     # UPSERT, never REPLACE: captures/detections cascade on runs deletion, so
     # `INSERT OR REPLACE` silently wiped a run's prior work whenever the same
     # run_id was started again — turning the standing incremental run

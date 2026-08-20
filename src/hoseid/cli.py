@@ -128,7 +128,11 @@ def _venv_python(name: str) -> str:
 
 @cli.command()
 @click.option("--run-id", default=None, help="Defaults to a UTC timestamp")
-@click.option("--threshold", type=float, default=0.2)
+# 0.1, matching scripts/nightly.sh, which is what actually produces this property's data. The
+# previous 0.2 default meant an ad-hoc `hoseid run` produced a different population than the
+# nightly did, under the same command. Measured reason to prefer the lower value: every bobcat
+# capture P has labelled sits at detector confidence 0.114-0.135, so 0.2 erases the species.
+@click.option("--threshold", type=float, default=0.1)
 @click.option("--limit", type=int, default=0)
 @click.option("--detect-only", is_flag=True)
 @click.option("--classify-only", is_flag=True)

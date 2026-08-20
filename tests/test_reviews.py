@@ -398,3 +398,37 @@ def test_other_animal_counts_as_presence_but_is_not_a_species_claim():
     assert rep["detector"]["tp"] == 1, "presence was asserted and the detector found it"
     assert rep["classifier"]["scored_captures"] == 0
     assert rep["classifier"]["declined_to_name"] == 0
+
+
+# --- run provenance (invariant 2) ---------------------------------------------
+
+def test_resuming_a_run_on_different_detector_terms_is_refused():
+    """The UPSERT rewrites the run row to the new terms, so a silent resume leaves provenance
+    describing rows that were never produced that way. Measured stake: every labelled bobcat on
+    this property sits at detector confidence 0.114-0.135, so a resume at 0.2 erases the species
+    while the run still looks healthy."""
+    _seed_run()
+    with db.detections() as conn:
+        with pytest.raises(db.RunProvenanceConflict, match="detector_threshold"):
+            db.start_run(conn, run_id=RUN, started_at="2026-08-06T00:00:00Z",
+                         detector_model="md", detector_version="1", detector_threshold=0.9)
+
+
+def test_resuming_on_identical_terms_still_works():
+    """The standing nightly run must keep resuming; only a change is refused."""
+    _seed_run()
+    with db.detections() as conn:
+        db.start_run(conn, run_id=RUN, started_at="2026-08-06T00:00:00Z",
+                     detector_model="md", detector_version="1", detector_threshold=0.2)
+        assert conn.execute("SELECT COUNT(*) FROM runs WHERE run_id=?", (RUN,)).fetchone()[0] == 1
+
+
+def test_a_deliberate_provenance_change_is_possible_but_explicit():
+    _seed_run()
+    with db.detections() as conn:
+        db.start_run(conn, run_id=RUN, started_at="2026-08-06T00:00:00Z",
+                     detector_model="md", detector_version="2", detector_threshold=0.9,
+                     allow_provenance_change=True)
+        row = conn.execute("SELECT detector_threshold FROM runs WHERE run_id=?",
+                           (RUN,)).fetchone()
+        assert row["detector_threshold"] == 0.9
