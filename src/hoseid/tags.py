@@ -105,6 +105,14 @@ def score_against_pipeline(run_id: str, species_tags: set[str] | None = None) ->
     species_tags restricts scoring to tags that name a species. Without it, individual-animal
     tags ("ben") and attribute tags ("antlered") would be scored as if they were species
     predictions. Defaults to the taxa the pipeline itself can emit.
+
+    NOT the scorer `hoseid score` calls. This one scores the detection-anchored `tags` table --
+    sparse positive labels, so it can measure naming accuracy but never a false positive or a
+    miss, both of which need true negatives. P's actual labels are complete per-capture verdicts
+    in the `reviews` table; `reviews.score_against_pipeline` scores those and reports the
+    detector and classifier layers separately. Kept because the tag store is still the design of
+    record for individual-animal and attribute labels ("ben", "antlered"), which reviews cannot
+    express.
     """
     from .taxonomy import _load, DEFAULT_CONFIG
     if species_tags is None:

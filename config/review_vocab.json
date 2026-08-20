@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "_comment": "Maps the review app's tag vocabulary onto the taxa the pipeline can emit, so human verdicts and pipeline predictions can be compared. A config file rather than code for the same reason taxon_map.json is: the review vocabulary changes when P adds a preset tag, and that must not be a code change.",
+
+  "_why_groups": "The two vocabularies are at different resolutions on purpose. P tags what he can see ('deer'); the classifier names what SpeciesNet resolved ('blacktail'). Scoring 'blacktail' against 'deer' as a disagreement would measure the vocabulary gap, not the pipeline. Each group is the set of pipeline taxa a human tag legitimately covers -- agreement means the prediction landed inside the group.",
+
+  "roles": {
+    "_comment": "Tags that are not species claims. They decide how a review row is used, not what it is scored against.",
+    "empty": "negative",
+    "unsure": "exclude",
+    "other-animal": "animal_unspecified"
+  },
+
+  "detector_class_groups": {
+    "_comment": "People and vehicles are named by the DETECTOR, not the classifier. Stage 2 only classifies detector_class='animal' crops, so a correctly-detected truck carries detector_class='vehicle' and a NULL taxon forever. Scoring those against `taxon` alone charges the classifier for 31 vehicles it was never asked about, and reports a pipeline that got them right as one that got them wrong.",
+    "person": "person",
+    "vehicle": "vehicle"
+  },
+
+  "declined_to_name": {
+    "_comment": "Classifier outputs that are an ABSENCE of a name rather than a competing name. A crop the classifier calls 'blank' when a bobcat was really there is a recall failure, not a confusion between bobcat and something else -- so it is counted against that tag's recall and reported separately, never entered into the confusion matrix as if 'blank' were a species the pipeline mistook it for.",
+    "taxa": ["blank"]
+  },
+
+  "groups": {
+    "deer": {
+      "taxa": ["blacktail", "whitetail"],
+      "note": "P does not distinguish blacktail from whitetail in the field and this is blacktail country; both count as agreement."
+    },
+    "bear": {"taxa": ["black_bear"]},
+    "mountain-lion": {
+      "taxa": ["mountain_lion"],
+      "note": "Deliberately strict. unknown_felid is NOT counted as agreement here -- invariant 4 keeps a rolled-up felid reaching review, but scoring it as a correct lion call would hide exactly the classifier weakness that matters most."
+    },
+    "coyote": {"taxa": ["coyote"]},
+    "bobcat": {"taxa": ["bobcat"]},
+    "fox": {"taxa": ["gray_fox"]},
+    "skunk": {"taxa": ["striped_skunk", "unknown_skunk"]},
+    "turkey": {"taxa": ["wild_turkey"]},
+    "jackrabbit": {
+      "taxa": ["jackrabbit", "brush_rabbit"],
+      "note": "taxon_map v2 rolls leporidae up to the jackrabbit property prior, so the pipeline cannot reliably split the two either. Grouped rather than pretending to a resolution neither side has."
+    },
+    "squirrel": {"taxa": ["western_gray_squirrel", "ground_squirrel"]},
+    "bird": {
+      "taxa": ["unknown_bird", "california_quail", "unknown_quail", "unknown_gamebird"],
+      "note": "'bird' is the only preset for every non-turkey bird, so it has to cover the quail taxa too. Turkey has its own tag and is scored separately."
+    },
+    "domestic-dog": {"taxa": ["domestic_dog"]},
+    "person": {"taxa": ["human"]},
+    "vehicle": {"taxa": ["vehicle"]}
+  },
+
+  "_unmatched_taxa_note": "Pipeline taxa with no group above (domestic_cat, opossum, raccoon, unknown_canid, unknown_carnivore, unknown_felid, unknown_mammal, unknown_mustelid, unknown) have no corresponding preset tag. A prediction of one of those against any human species tag scores as a disagreement and shows up in the confusion matrix under its own name, which is the honest reading: the pipeline named something the reviewer did not."
+}
