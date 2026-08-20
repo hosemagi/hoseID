@@ -44,8 +44,39 @@ hoseid run                                     # both stages; prints a taxon sum
 hoseid queue <run-id>                          # review queue, priority-ordered
 hoseid stats <run-id>                          # per-station activity incl. empty rate
 hoseid tag <detection-id> ben antlered         # review path only
-hoseid score <run-id>                          # pipeline vs P's tags
+hoseid score <run-id>                          # pipeline vs P's review verdicts
 ```
+
+Bulk vendor exports come in through their own command, because one export directory interleaves
+every camera on the property and `ingest-sd` takes a single station for a whole directory:
+
+```bash
+hoseid ingest-reveal-export ~/some-reveal-export --dry-run
+hoseid ingest-reveal-export ~/some-reveal-export
+```
+
+Station is resolved per file from the camera serial in the filename via the `device_id` field in
+`stations.json`. A serial the registry does not know is **refused, not guessed** — sidecars are
+immutable, so a capture ingested under the wrong station can only ever be papered over by an
+override, while a refused one can simply be ingested once the registry names the camera.
+
+### Measuring the pipeline against P's reviews
+
+```bash
+hoseid backfill-reviews      # fill reviews.asset_id — run once after a bulk review or ingest
+hoseid score nightly         # detector and classifier layers, scored separately
+hoseid sweep nightly         # what a detector-confidence floor would cost and save
+```
+
+`score` reports two layers because they fail independently and have different fixes: the
+**detector** (did it find anything — using `empty` verdicts as true negatives) and the
+**classifier** (did it name it right — scored only where the pipeline named something). It also
+reports coverage on every call, so a scorer that cannot find its labels says so instead of
+returning an accuracy computed over nothing. See invariants 9 and 10.
+
+`backfill-reviews` is the join between the two halves of the system: the review app addresses
+images by filename, the pipeline addresses captures by content hash, and nothing connected them.
+It is idempotent, and hashes only files that are not already content-addressed.
 
 `HOSEID_ROOT` overrides the data root (used by the eval runs and the tests).
 

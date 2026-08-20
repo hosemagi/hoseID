@@ -13,7 +13,7 @@ from pathlib import Path
 
 import click
 
-from . import landing, paths, review, stations, tags as tagstore
+from . import ingest_reveal_export, landing, paths, review, reviews, stations, tags as tagstore
 from .ingest_sd import ingest_directory
 from .sidecar import SidecarError, validate_sidecar
 
@@ -57,6 +57,27 @@ def ingest_sd_cmd(src: Path, station: str, vendor: str, device_id: str | None,
         sys.exit(1)
 
 
+@cli.command("ingest-reveal-export")
+@click.argument("src", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--dry-run", is_flag=True)
+def ingest_reveal_export_cmd(src: Path, dry_run: bool) -> None:
+    """Ingest a bulk Reveal web export, resolving station per file from the camera serial.
+
+    Separate from ingest-sd because an export interleaves every camera on the property, so one
+    station for the whole directory would be wrong. Files whose serial is not in stations.json
+    are refused rather than guessed at.
+    """
+    rep = ingest_reveal_export.ingest_export(src, dry_run=dry_run)
+    click.echo(json.dumps({
+        "scanned": rep.scanned, "ingested": rep.ingested, "duplicates": rep.duplicates,
+        "unparsed_name": len(rep.unparsed_name),
+        "unparsed_examples": rep.unparsed_name[:5],
+        "unknown_device": rep.unknown_device,
+        "errors": rep.errors[:10], "n_errors": len(rep.errors), "dry_run": dry_run}, indent=1))
+    if rep.errors:
+        sys.exit(1)
+
+
 @cli.command()
 @click.option("--verify-digests", is_flag=True, help="Re-hash every asset (slow)")
 def check(verify_digests: bool) -> None:
@@ -67,9 +88,17 @@ def check(verify_digests: bool) -> None:
         "invalid": rep.invalid[:20], "missing_asset": rep.missing_asset[:20],
         "orphan_assets": rep.orphan_assets[:20], "digest_mismatch": rep.digest_mismatch[:20],
         "untrusted_capture_time": len(rep.untrusted_time),
+        "staged_duplicates": len(rep.staged_duplicates),
+        "staged_duplicate_examples": rep.staged_duplicates[:5],
         "ok": rep.ok,
     }
     click.echo(json.dumps(out, indent=1))
+    if rep.staged_duplicates:
+        click.echo(
+            f"\nnote: {len(rep.staged_duplicates)} file(s) sit under a vendor-supplied name but "
+            f"are already ingested content-addressed. Nothing is at risk and the check still "
+            f"passes; they are redundant copies taking disk. The review app still serves some of "
+            f"them by path, so remove them only alongside repointing it.", err=True)
     sys.exit(0 if rep.ok else 1)
 
 
@@ -189,11 +218,40 @@ def vocab_cmd() -> None:
         click.echo(f"{n:5d}  {tag:24s} {last}")
 
 
+# --- reviews (complete verdicts; see reviews.py on why this is not the tag store) ------
+@cli.command("backfill-reviews")
+@click.option("--dry-run", is_flag=True)
+@click.option("--rehash", is_flag=True, help="Recompute asset_id even where one is already set")
+def backfill_reviews_cmd(dry_run: bool, rehash: bool) -> None:
+    """Fill reviews.asset_id so human verdicts can join pipeline captures.
+
+    Hashes any reviewed file that is not already content-addressed, so the first run over a large
+    export is slow. Idempotent: re-running only touches rows that still have no asset_id.
+    """
+    rep = reviews.backfill_asset_ids(dry_run=dry_run, rehash=rehash)
+    click.echo(json.dumps({
+        "reviews": rep.total, "already_had_asset_id": rep.already,
+        "resolved_from_path": rep.from_path, "resolved_by_hashing": rep.hashed,
+        "unresolvable_missing_file": rep.missing,
+        "missing_examples": rep.missing_examples, "dry_run": dry_run}, indent=1))
+
+
 @cli.command("score")
 @click.argument("run_id")
 def score_cmd(run_id: str) -> None:
-    """Pipeline output vs P's tags -- the accumulating regression suite."""
-    click.echo(json.dumps(tagstore.score_against_pipeline(run_id), indent=1))
+    """Pipeline output vs P's review verdicts -- the accumulating regression suite.
+
+    Two layers, reported separately: the detector (did it find anything) and the classifier (did
+    it name it right). Run `backfill-reviews` first, or coverage will report everything unjoined.
+    """
+    click.echo(json.dumps(reviews.score_against_pipeline(run_id), indent=1))
+
+
+@cli.command("sweep")
+@click.argument("run_id")
+def sweep_cmd(run_id: str) -> None:
+    """What a detector-confidence floor would cost and save, measured on real verdicts."""
+    click.echo(json.dumps(reviews.confidence_sweep(run_id), indent=1))
 
 
 if __name__ == "__main__":
