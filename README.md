@@ -110,8 +110,16 @@ zone — the bytes are the irreplaceable part — flagged via `probe_status` on 
 **Known limitation.** Because the cap spreads, effective fps falls as clip duration grows: a
 5-minute clip samples at ~0.13 fps, so an animal crossing frame in 3 seconds can be missed
 entirely. This is still a valid lower bound under invariant 7, but clip duration silently controls
-detection sensitivity. Revisit once real Arlo/Reveal clip durations are known — if long clips are
-common, the cap should scale with duration rather than stay fixed.
+detection sensitivity.
+
+**Measured 2026-08-20**, now that real clips have landed (415 video captures): median duration
+10.8 s, p90 20.2 s, max 108.8 s. The cap binds — i.e. 2 fps would exceed 40 frames — on **43 of
+415 clips (10.4%)**. So long clips are real but not common, and the worst case is a 108.8 s clip
+sampled at an effective 0.37 fps. The fixed cap stays for now on that evidence; the number to
+watch is the 10.4%, not the maximum. Note that changing the sampling policy invalidates
+comparison with existing rows — `runs.sampling_policy` records it per run precisely so a re-run
+at a different density is comparable rather than silently different, which means a change here
+means a re-run, not an edit.
 
 ## Layout
 
