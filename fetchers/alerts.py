@@ -137,12 +137,13 @@ def _notify(cfg: dict, title: str, message: str, priority: str,
     try:
         if image is not None:
             headers["Filename"] = image.name
-            requests.put(url, data=image.read_bytes(), headers=headers,
-                         timeout=30)
+            resp = requests.put(url, data=image.read_bytes(), headers=headers,
+                                 timeout=30)
         else:
-            requests.post(url, data=_ascii(message).encode(), headers={
+            resp = requests.post(url, data=_ascii(message).encode(), headers={
                 "Title": _ascii(title), "Priority": priority, "Tags": tags},
                 timeout=30)
+        resp.raise_for_status()
         return True
     except Exception as e:
         log(f"alerts: ntfy send failed: {type(e).__name__}: {e}")
