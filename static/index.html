@@ -317,7 +317,7 @@ async function save(advance = true) {
   if ($('indiv').value && !$('indivConf').value) {
     alert('Naming an individual requires a confidence level.'); return;
   }
-  const body = { basename: item.basename, tags: [...sel.keys()], counts,
+  const body = { asset_id: item.asset_id, tags: [...sel.keys()], counts,
     individual: $('indiv').value || null,
     individual_confidence: $('indivConf').value || null,
     notes: $('notes').value };

@@ -110,7 +110,10 @@ def test_missing_file_is_reported_not_guessed():
     _add_review("gone/vanished.jpg", ["deer"])
     rep = reviews.backfill_asset_ids()
     assert rep.missing == 1 and rep.missing_examples == ["gone/vanished.jpg"]
-    assert reviews.latest_reviews()[0].asset_id is None
+    # Unjoinable, so it cannot appear in the by-asset view -- but it must still be countable,
+    # or it leaves the store silently. That is what count_unjoinable is for.
+    assert reviews.latest_reviews() == []
+    assert reviews.count_unjoinable() == 1
 
 
 def test_backfill_is_idempotent():
@@ -125,18 +128,42 @@ def test_dry_run_writes_nothing():
     digest = "c" * 64
     _add_review(f"{digest[:2]}/{digest[2:4]}/{digest}.jpg", ["deer"])
     reviews.backfill_asset_ids(dry_run=True)
-    assert reviews.latest_reviews()[0].asset_id is None
+    assert reviews.count_unjoinable() == 1, "still unjoined, so nothing was written"
 
 
-def test_only_the_latest_review_per_basename_counts():
+def test_only_the_latest_review_per_capture_counts():
     """The review app is insert-only and the newest row wins. A reader that does not dedupe
     double-counts every capture P looked at twice."""
     digest = "d" * 64
     img = f"{digest[:2]}/{digest[2:4]}/{digest}.jpg"
     _add_review(img, ["deer"], reviewed_at="2026-08-16T00:00:00Z")
     _add_review(img, ["empty"], reviewed_at="2026-08-17T00:00:00Z")
+    reviews.backfill_asset_ids()
     rv = reviews.latest_reviews()
     assert len(rv) == 1 and rv[0].tags == frozenset({"empty"})
+
+
+def test_one_capture_reviewed_under_two_filenames_resolves_to_one_verdict():
+    """The case that forced identity onto the hash: a bulk-export capture reviewed under its
+    vendor filename, ingested, then reviewed again under its content-addressed name. Grouping by
+    basename yields two rows that disagree about whether it was reviewed at all."""
+    src = paths.assets_dir() / "2026-08-16-reveal-export" / "vendor-name.jpg"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"the-same-bytes")
+    digest = compute_asset_id(src).split(":", 1)[1]
+    ca = paths.assets_dir() / digest[:2] / digest[2:4] / f"{digest}.jpg"
+    ca.parent.mkdir(parents=True, exist_ok=True)
+    ca.write_bytes(b"the-same-bytes")
+
+    _add_review("2026-08-16-reveal-export/vendor-name.jpg", ["deer"],
+                reviewed_at="2026-08-16T00:00:00Z")
+    _add_review(f"{digest[:2]}/{digest[2:4]}/{digest}.jpg", ["empty"],
+                reviewed_at="2026-08-20T00:00:00Z")
+    reviews.backfill_asset_ids()
+
+    rv = reviews.latest_reviews()
+    assert len(rv) == 1, "two filenames, one capture, one verdict"
+    assert rv[0].tags == frozenset({"empty"}), "the newer verdict wins"
 
 
 # --- the detector layer: only possible because reviews are complete -----------
@@ -341,6 +368,7 @@ def test_unjoined_reviews_are_reported_not_silently_dropped():
     report an accuracy computed over nothing."""
     _seed_run()
     _add_review("gone/vanished.jpg", ["deer"])
+    reviews.backfill_asset_ids()
     rep = reviews.score_against_pipeline(RUN)
     assert rep["coverage"]["unjoined_no_asset_id"] == 1
     assert rep["coverage"]["scored"] == 0

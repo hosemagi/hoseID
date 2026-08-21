@@ -105,11 +105,18 @@ def _row_to_review(r: sqlite3.Row) -> Review:
     )
 
 
-# The review app is insert-only and takes the newest row per basename as current. Any read that
+# The review app is insert-only and takes the newest row per CAPTURE as current. Any read that
 # does not do the same double-counts every re-reviewed capture.
+#
+# Grouped by asset_id, matching app.py. Grouping by basename would be wrong now that the same
+# capture can carry two filenames: a bulk export reviewed under its vendor name and then again
+# under the content-addressed name it got when ingested would surface as two rows, and the
+# scorer would count one capture twice — from two verdicts that may well disagree, since the
+# later one exists precisely because P changed their mind.
 _LATEST = """
     SELECT r.* FROM reviews r
-    JOIN (SELECT basename, MAX(id) AS id FROM reviews GROUP BY basename) m
+    JOIN (SELECT asset_id, MAX(id) AS id FROM reviews
+          WHERE asset_id IS NOT NULL GROUP BY asset_id) m
       ON m.id = r.id
 """
 
@@ -118,6 +125,26 @@ def latest_reviews() -> list[Review]:
     with db.tags(create=False) as conn:
         _ensure_asset_id_column(conn)
         return [_row_to_review(r) for r in conn.execute(_LATEST).fetchall()]
+
+
+def count_unjoinable() -> int:
+    """Captures whose current verdict carries no asset_id, and so cannot be scored at all.
+
+    Counted separately because `latest_reviews` groups by asset_id and therefore cannot see
+    these rows — they have nothing to group on. Without this they would leave the store silently,
+    which is the exact failure invariant 10 exists to prevent: a scorer that quietly drops the
+    labels it cannot find reports a clean-looking accuracy over whatever happens to remain.
+
+    Grouped by basename, the only handle these rows still have.
+    """
+    with db.tags(create=False) as conn:
+        _ensure_asset_id_column(conn)
+        return conn.execute("""
+            SELECT COUNT(*) FROM reviews r
+            JOIN (SELECT basename, MAX(id) AS id FROM reviews GROUP BY basename) m
+              ON m.id = r.id
+            WHERE r.asset_id IS NULL
+        """).fetchone()[0]
 
 
 # --- the missing join key -----------------------------------------------------
@@ -165,8 +192,8 @@ def _asset_id_for(image_rel: str) -> tuple[str | None, str]:
 
 @dataclass
 class BackfillReport:
-    total: int = 0
-    already: int = 0
+    total: int = 0          # review rows in the store
+    already: int = 0        # of those, rows that already carried an asset_id
     from_path: int = 0
     hashed: int = 0
     missing: int = 0
@@ -187,13 +214,17 @@ def backfill_asset_ids(*, dry_run: bool = False, rehash: bool = False) -> Backfi
     rep = BackfillReport()
     with db.tags(create=False) as conn:
         _ensure_asset_id_column(conn)
-        rows = conn.execute(f"SELECT id, image, asset_id FROM ({_LATEST})").fetchall()
+        rep.total = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+        rep.already = conn.execute(
+            "SELECT COUNT(*) FROM reviews WHERE asset_id IS NOT NULL").fetchone()[0]
+        # Every row lacking an asset_id, not just the current one per capture. Superseded rows
+        # are cheap to resolve, and leaving them NULL would make MAX(id)-per-asset_id quietly
+        # wrong the moment one of them turned out to be the newest for its capture.
+        rows = conn.execute(
+            "SELECT id, image, asset_id FROM reviews"
+            + ("" if rehash else " WHERE asset_id IS NULL")).fetchall()
         updates: list[tuple[str, int]] = []
         for r in rows:
-            rep.total += 1
-            if r["asset_id"] and not rehash:
-                rep.already += 1
-                continue
             aid, how = _asset_id_for(r["image"])
             if aid is None:
                 rep.missing += 1
@@ -260,7 +291,7 @@ def score_against_pipeline(run_id: str, config_path: Path | None = None) -> dict
     caps, dets = _capture_rows(run_id)
     reviews = latest_reviews()
 
-    unjoined = 0            # reviewed, but no asset_id -> cannot be matched at all
+    unjoined = count_unjoinable()   # current verdicts with no asset_id: unscorable, still counted
     not_in_run = 0          # joined, but this run never processed that capture
     excluded_unsure = 0
 
@@ -275,9 +306,6 @@ def score_against_pipeline(run_id: str, config_path: Path | None = None) -> dict
     for rv in reviews:
         if rv.is_unsure:
             excluded_unsure += 1
-            continue
-        if not rv.asset_id:
-            unjoined += 1
             continue
         cap = caps.get(rv.asset_id)
         if cap is None:

@@ -4,9 +4,23 @@
 Run:  ~/venvs/megadetector/bin/uvicorn app:app --host 0.0.0.0 --port 8870
 from this directory.
 
-Reads MegaDetector results (sidecar JSON), serves originals read-only from the
-immutable archive, and stores human tags in ~/trailcam/tags/tags.db.
-The reviews table is insert-only; the latest row per image basename wins.
+Reads pipeline output from detections.db, serves originals read-only from the
+immutable archive, and stores human verdicts in ~/trailcam/tags/tags.db.
+The reviews table is insert-only; the latest row per ASSET wins.
+
+Identity is `asset_id`, the content hash — not the filename (2026-08-20). It used
+to be the basename, and there were two populations with two naming schemes: a bulk
+Reveal export reviewed in place under vendor filenames, and pipeline captures named
+by content hash. When the export was finally ingested, every one of those 1,726
+captures existed under both names, so the queue offered each of them a second time
+as though it had never been reviewed. Filenames were never identity; the same bytes
+had two of them. The hash is the same for both, so a verdict recorded under either
+name now attaches to the capture itself, and grouping by asset_id means the newest
+verdict wins regardless of which name it happened to be recorded under.
+
+That is also why the MegaDetector-results sidecar is gone as an image source: the
+export is in the landing zone now, so the pipeline is the single source of captures
+and its per-detection taxa replace the separate speciesnet predictions file.
 
 Exclusion zones are the ONE lossy layer in the pipeline, so they carry guards:
   - zones are versioned by camera deployment epoch; "camera moved" bumps the
@@ -18,7 +32,6 @@ Exclusion zones are the ONE lossy layer in the pipeline, so they carry guards:
 """
 
 import json
-import re
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
@@ -32,12 +45,8 @@ from pydantic import BaseModel
 ASSETS = Path("/Users/hosebot/trailcam/landing/assets")
 SIDECARS = Path("/Users/hosebot/trailcam/landing/sidecars")
 DETECTIONS_DB = Path("/Users/hosebot/trailcam/derived/detections.db")
-MD_RESULTS = Path(
-    "/Users/hosebot/trailcam/derived/runs/2026-08-16-md-combined/md_results.json"
-)
 DB_PATH = Path("/Users/hosebot/trailcam/tags/tags.db")
 MOVE_FLAGS = Path("/Users/hosebot/trailcam/derived/camera-move-flags.json")
-SPECIES_PREDICTIONS = MD_RESULTS.parent / "speciesnet_predictions.json"
 STATIC = Path(__file__).parent / "static"
 
 MAX_ZONE_AREA_FRAC = 0.25   # a single zone larger than this needs confirm
@@ -52,12 +61,6 @@ PRESET_TAGS = [
     ("vehicle", "v"), ("unsure", "u"),
 ]
 
-FNAME_RE = re.compile(
-    r"(?P<device>\d{15})-\d+-\d+-"
-    r"(?P<mm>\d{2})(?P<dd>\d{2})(?P<yyyy>\d{4})(?P<hh>\d{2})(?P<mi>\d{2})(?P<ss>\d{2})-"
-    r"[A-Z]+\d+\.jpg$"
-)
-
 
 def db():
     conn = sqlite3.connect(DB_PATH)
@@ -71,10 +74,11 @@ def init_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS reviews (
                 id INTEGER PRIMARY KEY,
-                basename TEXT NOT NULL,
+                asset_id TEXT,                -- content hash; THE identity (see module docstring)
+                basename TEXT NOT NULL,       -- filename at review time; provenance, not identity
                 image TEXT NOT NULL,          -- path relative to landing/assets
                 device_id TEXT,
-                captured_at TEXT,             -- ISO local, parsed from filename
+                captured_at TEXT,             -- ISO local
                 tags TEXT NOT NULL,           -- JSON array of strings
                 notes TEXT NOT NULL DEFAULT '',
                 md_max_conf REAL,
@@ -86,6 +90,13 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_reviews_basename ON reviews(basename)"
         )
         cols = {r[1] for r in conn.execute("PRAGMA table_info(reviews)")}
+        if "asset_id" not in cols:
+            # Also added by `hoseid backfill-reviews`, which fills it for existing
+            # rows. Created here too so a fresh database has it from the start.
+            conn.execute("ALTER TABLE reviews ADD COLUMN asset_id TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reviews_asset ON reviews(asset_id)"
+        )
         if "counts" not in cols:
             # JSON object tag -> count; a tag absent here counts as 1
             conn.execute(
@@ -136,40 +147,6 @@ def init_db():
             )
         """)
 
-
-def load_images():
-    """basename -> image record, from the MD results sidecar."""
-    results = json.loads(MD_RESULTS.read_text())
-    images = {}
-    for im in results["images"]:
-        rel = im["file"]
-        name = Path(rel).name
-        m = FNAME_RE.search(name)
-        meta = m.groupdict() if m else None
-        captured = (
-            f"{meta['yyyy']}-{meta['mm']}-{meta['dd']}"
-            f"T{meta['hh']}:{meta['mi']}:{meta['ss']}" if meta else None
-        )
-        dets = im.get("detections") or []
-        images[name] = {
-            "basename": name,
-            "image": rel,
-            "device_id": meta["device"] if meta else None,
-            "captured_at": captured,
-            "detections": dets,
-            "md_max_conf": max((d["conf"] for d in dets), default=0.0),
-        }
-    return images
-
-
-IMAGES = load_images()
-
-# Optional sidecar from scripts/classify_md_results.py: basename -> per-detection
-# SpeciesNet predictions. Suggestions only — never auto-applied as tags.
-SPECIES = (
-    json.loads(SPECIES_PREDICTIONS.read_text())["predictions"]
-    if SPECIES_PREDICTIONS.exists() else {}
-)
 
 # --- pipeline captures (fetch daemon -> landing zone -> nightly hoseid run) ---
 # Read live from detections.db, cached on its mtime, so new nightly output
@@ -226,7 +203,8 @@ def pipeline_images() -> dict:
                                 "review_priority": d["review_priority"]})
         cap_dt = datetime.fromisoformat(cap["capture_time"])
         captured = cap_dt.astimezone(_LOCAL_TZ).replace(tzinfo=None).isoformat()
-        items[asset.name] = {
+        items[asset_id] = {
+            "asset_id": asset_id,
             "basename": asset.name,
             "image": str(asset.relative_to(ASSETS)),
             "media_type": cap["media_type"] if "media_type" in cap.keys() else "image",
@@ -242,7 +220,8 @@ def pipeline_images() -> dict:
 
 
 def all_images() -> dict:
-    return {**IMAGES, **pipeline_images()}
+    """asset_id -> capture record. The pipeline is the only source of captures."""
+    return pipeline_images()
 
 
 init_db()
@@ -287,12 +266,21 @@ def active_zones(conn, device_id=None):
 
 
 def latest_reviews(conn):
+    """asset_id -> newest verdict for that capture.
+
+    Grouped by asset_id rather than basename so a capture reviewed under its vendor
+    filename and again under its content-addressed name resolves to ONE verdict —
+    the newest — instead of two rows that disagree about whether it was reviewed.
+    Rows with no asset_id are skipped: they are superseded older reviews from before
+    the backfill, and their current verdict is carried by a row that does have one.
+    """
     rows = conn.execute("""
         SELECT r.* FROM reviews r
-        JOIN (SELECT basename, MAX(id) AS id FROM reviews GROUP BY basename) m
+        JOIN (SELECT asset_id, MAX(id) AS id FROM reviews
+              WHERE asset_id IS NOT NULL GROUP BY asset_id) m
           ON r.id = m.id
     """).fetchall()
-    return {r["basename"]: r for r in rows}
+    return {r["asset_id"]: r for r in rows}
 
 
 def _intersects(a, b):
@@ -320,7 +308,7 @@ def _excluded(det, zones):
 
 
 class ReviewIn(BaseModel):
-    basename: str
+    asset_id: str
     tags: list[str]
     counts: dict[str, int] = {}   # tag -> count, only for counts > 1
     individual: str | None = None
@@ -508,7 +496,7 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
     for im in all_images().values():
         if device and im["device_id"] != device:
             continue
-        r = reviewed.get(im["basename"])
+        r = reviewed.get(im["asset_id"])
         if status == "unreviewed" and r:
             continue
         if status == "reviewed" and not r:
@@ -517,7 +505,7 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
         dev_zones = by_dev.get(im["device_id"], [])
         dets = [dict(d, excluded=_excluded(d, dev_zones)) for d in im["detections"]]
         item["detections"] = dets
-        item["species"] = im.get("pipeline_species") or SPECIES.get(im["basename"])
+        item["species"] = im.get("pipeline_species")
         item.pop("pipeline_species", None)
         item["md_max_conf_eff"] = max(
             (d["conf"] for d in dets if not d["excluded"]), default=0.0
@@ -559,9 +547,9 @@ def stats():
 
 @app.post("/api/review")
 def review(r: ReviewIn):
-    im = all_images().get(r.basename)
+    im = all_images().get(r.asset_id)
     if not im:
-        raise HTTPException(404, f"unknown image {r.basename}")
+        raise HTTPException(404, f"unknown asset {r.asset_id}")
     if not r.tags:
         raise HTTPException(400, "at least one tag required")
     counts = {t: c for t, c in r.counts.items() if c > 1}
@@ -573,10 +561,11 @@ def review(r: ReviewIn):
                                  "no name)")
     with db() as conn:
         conn.execute(
-            "INSERT INTO reviews (basename, image, device_id, captured_at,"
+            "INSERT INTO reviews (asset_id, basename, image, device_id, captured_at,"
             " tags, counts, individual, individual_confidence, notes,"
-            " md_max_conf, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (im["basename"], im["image"], im["device_id"], im["captured_at"],
+            " md_max_conf, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (im["asset_id"], im["basename"], im["image"], im["device_id"],
+             im["captured_at"],
              json.dumps(sorted(r.tags)), json.dumps(counts), r.individual,
              r.individual_confidence, r.notes.strip(),
              im["md_max_conf"], now_iso()),
