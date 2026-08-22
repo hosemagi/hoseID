@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from .common import TMP_DIR, State, download, ingest, log
+from hoseid.landing import ImmutabilityError  # noqa: E402 (sys.path set by .common)
 
 COGNITO = "https://cognito-idp.us-east-1.amazonaws.com/"
 CLIENT_ID = "6r9tpojvgvkci5trla0ip14mon"
@@ -123,11 +124,12 @@ def poll(client: RevealClient, state: State) -> list[str]:
         page += 1
 
     ingested = 0
+    conflicts = 0
     new_assets: list[str] = []
     for item in sorted(new_items, key=lambda p: p["createdTimestamp"]):
         pid = item["photoId"]
         tmp = download(item["photoUrl"], TMP_DIR / pid)
-        result = ingest(tmp, dict(
+        sidecar = dict(
             media_type="image",
             source="reveal_api",
             resolution_class="compressed",      # cellular delivery downsizes
@@ -147,12 +149,34 @@ def poll(client: RevealClient, state: State) -> list[str]:
             },
             trigger_type="motion",
             raw_vendor_payload=item,
-        ))
-        if not result.already_present:
-            ingested += 1
-            new_assets.append(result.asset_id)
+        )
+        try:
+            result = ingest(tmp, sidecar)
+        except ImmutabilityError as e:
+            # A conflicting sidecar is deterministic -- the same bytes will
+            # conflict on every future poll -- so raising here stops the cursor
+            # advancing and blocks every later photo behind this one, forever.
+            # (Observed 2026-08-21: 198 consecutive failures over ~16h on a
+            # single asset.) Reveal re-serves an identical photo under a new
+            # photoId when a camera re-transmits, and the transmit-time
+            # telemetry in the id and in `conditions` differs, which the
+            # landing zone reads as a conflicting capture.
+            #
+            # Skip this one item and keep going. The skip is logged per
+            # occurrence and counted in the summary -- it is real, if small,
+            # data loss, and must not be silent. Only ImmutabilityError is
+            # swallowed: transient failures still raise, so they keep their
+            # retry semantics instead of being skipped past.
+            conflicts += 1
+            log(f"reveal: SKIP {pid} (conflicting sidecar, not retryable): {e}")
+            tmp.unlink(missing_ok=True)
+        else:
+            if not result.already_present:
+                ingested += 1
+                new_assets.append(result.asset_id)
         state.set("reveal_cursor_ms", item["createdTimestamp"])
     if new_items:
         log(f"reveal: {len(new_items)} new, {ingested} ingested "
-            f"({len(new_items) - ingested} already present)")
+            f"({len(new_items) - ingested - conflicts} already present, "
+            f"{conflicts} skipped on conflict)")
     return new_assets

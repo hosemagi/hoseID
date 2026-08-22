@@ -16,12 +16,30 @@ from __future__ import annotations
 import imaplib
 import ssl
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .common import TMP_DIR, State, ingest, log, notify
 
 SESSION_DIR = Path.home() / ".config/hoseid-fetch/arlo-session"
+
+# Events that mean a clip was actually written to the cloud, as opposed to
+# motion that may never have been recorded (disarmed camera, dead battery).
+MEDIA_EVENTS = ("mediaUploadNotification", "mediaObjectCount")
+
+# How far the library may lag a media event before we call it frozen. Generous:
+# the sweep interval is 900s and uploads are not instant.
+LIBRARY_STALE_AFTER_S = 3600
+
+# hoseID covers the cabin property only. The Arlo account also holds cameras at
+# another property, labelled with an "MH - " prefix; those are not cabin
+# cameras and must never reach the wildlife review queue. Filtering at the
+# fetch boundary rather than at analysis time keeps them out of the landing
+# zone entirely, which matters because the landing zone is append-only --
+# anything ingested here can only be removed by hand.
+# Override per-deployment with `exclude_station_prefixes` in [arlo].
+DEFAULT_EXCLUDED_PREFIXES = ("MH -",)
 
 
 class BridgeIMAP4(imaplib.IMAP4):
@@ -44,6 +62,10 @@ class ArloFetcher:
         self._state = state
         self._arlo = None
         self.sweep_wanted = threading.Event()
+        self._last_media_event = 0.0
+        self._excluded_prefixes = tuple(
+            cfg.get("arlo", {}).get("exclude_station_prefixes",
+                                    DEFAULT_EXCLUDED_PREFIXES))
 
     def connect(self) -> None:
         arlo_cfg, imap = self._cfg["arlo"], self._cfg["tfa_imap"]
@@ -66,14 +88,23 @@ class ArloFetcher:
         if not self._arlo.is_connected:
             raise RuntimeError(f"arlo connect failed: {self._arlo.last_error}")
         # Any media-ish event just schedules a sweep; the sweep does the work.
-        for cam in self._arlo.cameras:
+        # Excluded cameras get no callback, so they never even wake a sweep.
+        watched = [c for c in self._arlo.cameras if not self.is_excluded(c.name)]
+        for cam in watched:
             cam.add_attr_callback("*", self._on_event)
-        log(f"arlo: connected, {len(self._arlo.cameras)} cameras, "
-            "event stream live")
+        skipped = len(self._arlo.cameras) - len(watched)
+        log(f"arlo: connected, {len(watched)} cameras, event stream live"
+            + (f" ({skipped} excluded by prefix {self._excluded_prefixes})"
+               if skipped else ""))
+
+    def is_excluded(self, station: str | None) -> bool:
+        return bool(station) and station.startswith(self._excluded_prefixes)
 
     def _on_event(self, device, attr, value) -> None:
         if attr in ("mediaUploadNotification", "motionDetected", "lastImage",
                     "mediaObjectCount"):
+            if attr in MEDIA_EVENTS:
+                self._last_media_event = time.time()
             log(f"arlo: event {attr} from {device.name!r} -> sweep scheduled")
             self.sweep_wanted.set()
 
@@ -81,11 +112,15 @@ class ArloFetcher:
         """Download every cloud recording newer than each camera's cursor."""
         cursors = self._state.get("arlo_cursors", {})
         ingested = 0
+        newest_ms = 0
         new_assets: list[str] = []
         for cam in self._arlo.cameras:
+            if self.is_excluded(cam.name):
+                continue
             cur = cursors.get(cam.device_id, 0)
             for vid in reversed(cam.last_n_videos(50) or []):
                 created_ms = int(vid.created_at or 0)
+                newest_ms = max(newest_ms, created_ms)
                 if created_ms <= cur:
                     continue
                 name = f"{cam.device_id}_{created_ms}.mp4"
@@ -104,7 +139,38 @@ class ArloFetcher:
                 self._state.set("arlo_cursors", cursors)
         if ingested:
             log(f"arlo: sweep ingested {ingested} recording(s)")
+        else:
+            self._assert_library_fresh(newest_ms)
         return new_assets
+
+    def _assert_library_fresh(self, newest_ms: int) -> None:
+        """A sweep that ingests nothing is normally just a quiet night -- but it
+        is also exactly what a frozen media library looks like, and that
+        failure is silent: pyaarlo serves each camera's cached video list, so
+        `last_n_videos` keeps returning stale rows and nothing raises.
+
+        The event stream is the independent witness. A media event means a clip
+        reached the cloud, so a library whose newest recording predates that
+        event by hours is stale, not empty. Raise, so the daemon's consecutive-
+        failure counter and notify() path actually fire instead of the fetcher
+        reporting health while ingesting nothing.
+
+        Only checked when nothing was ingested, so this can never discard work.
+        A wholly empty library (newest_ms == 0) is left alone -- it is the
+        legitimate state before the first recording lands.
+        """
+        if not self._last_media_event or not newest_ms:
+            return
+        lag_s = self._last_media_event - newest_ms / 1000
+        if lag_s <= LIBRARY_STALE_AFTER_S:
+            return
+        newest = datetime.fromtimestamp(newest_ms / 1000, tz=timezone.utc)
+        raise RuntimeError(
+            f"media library appears frozen: newest recording is "
+            f"{newest.isoformat()}, but a media-upload event arrived "
+            f"{lag_s / 3600:.1f}h after it. The library cache has stopped "
+            f"refreshing -- restart the daemon."
+        )
 
     def _ingest_video(self, cam, vid, tmp: Path, created_ms: int) -> str | None:
         from hoseid.video import probe_safe
@@ -137,6 +203,8 @@ class ArloFetcher:
         only fetch captures that happen from now on."""
         cursors = {}
         for cam in self._arlo.cameras:
+            if self.is_excluded(cam.name):
+                continue
             vids = cam.last_n_videos(1) or []
             cursors[cam.device_id] = int(vids[0].created_at) if vids else 0
         self._state.set("arlo_cursors", cursors)

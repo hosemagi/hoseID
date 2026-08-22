@@ -57,6 +57,9 @@ def main() -> int:
     seen = Counter()
     ingested = skipped_type = errors = 0
     for cam in arlo.cameras:
+        if fetcher.is_excluded(cam.name):
+            log(f"{cam.name!r}: skipped (not a cabin camera)")
+            continue
         vids = cam.last_n_videos(10000) or []
         log(f"{cam.name!r}: {len(vids)} recordings in the last {args.days}d")
         for vid in reversed(vids):
@@ -75,7 +78,11 @@ def main() -> int:
                 vid.download_video(str(tmp))
                 if not tmp.exists() or tmp.stat().st_size == 0:
                     raise RuntimeError("empty download")
-                ingested += fetcher._ingest_video(cam, vid, tmp, created_ms)
+                # _ingest_video returns the asset id, or None when the clip
+                # is already in the landing zone (commit 3f83949 changed it
+                # from an int; this counter was never updated to match).
+                if fetcher._ingest_video(cam, vid, tmp, created_ms):
+                    ingested += 1
             except Exception as e:
                 errors += 1
                 log(f"  ERROR {name}: {type(e).__name__}: {e}")
