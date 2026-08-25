@@ -83,15 +83,35 @@ def ingest(tmp_file: Path, sidecar_kwargs: dict) -> StoreResult:
     return result
 
 
-def notify(cfg: dict, message: str) -> None:
-    """Best-effort operator alert (ntfy-style POST). Never raises."""
+def notify_url(cfg: dict) -> str:
+    """Where operator alerts go. ``[notify] url`` if set; otherwise the
+    ``[alerts]`` ntfy topic P's phone already subscribes to for wildlife
+    pages. The fallback exists because for three days in Aug 2026 the
+    daemon raised 393 consecutive "library frozen" errors into a notify()
+    that had no URL configured, and nobody heard a thing."""
     url = cfg.get("notify", {}).get("url", "")
+    if url:
+        return url
+    a = cfg.get("alerts", {})
+    if a.get("ntfy_server") and a.get("ntfy_topic"):
+        return f"{a['ntfy_server'].rstrip('/')}/{a['ntfy_topic']}"
+    return ""
+
+
+def notify(cfg: dict, message: str, title: str = "hoseid-fetch") -> None:
+    """Best-effort operator alert (ntfy-style POST). Never raises."""
+    url = notify_url(cfg)
     if not url:
+        log(f"notify: NO URL CONFIGURED, dropping: {message}")
         return
     try:
-        requests.post(url, data=message.encode(), timeout=10)
-    except Exception:
-        pass
+        # ntfy headers are latin-1; keep the title ASCII-safe.
+        requests.post(url, data=message.encode(), timeout=10,
+                      headers={"Title": title.encode("ascii", "replace")
+                               .decode(), "Priority": "high",
+                               "Tags": "warning"})
+    except Exception as e:
+        log(f"notify: send failed: {type(e).__name__}: {e}")
 
 
 def log(msg: str) -> None:

@@ -32,6 +32,14 @@ MEDIA_EVENTS = ("mediaUploadNotification", "mediaObjectCount")
 # the sweep interval is 900s and uploads are not instant.
 LIBRARY_STALE_AFTER_S = 3600
 
+# pyaarlo re-derives every camera's media state from the library on its own
+# schedule (the midnight-local "captured today" rollover, reconnects) and fires
+# mediaUploadNotification on EVERY camera when it does -- no clip involved. Such
+# a fleet-wide burst is not a witness that anything was uploaded. A burst is
+# >= BURST_MIN_CAMERAS distinct cameras inside BURST_WINDOW_S.
+BURST_MIN_CAMERAS = 4
+BURST_WINDOW_S = 5.0
+
 # hoseID covers the cabin property only. The Arlo account also holds cameras at
 # another property, labelled with an "MH - " prefix; those are not cabin
 # cameras and must never reach the wildlife review queue. Filtering at the
@@ -62,7 +70,11 @@ class ArloFetcher:
         self._state = state
         self._arlo = None
         self.sweep_wanted = threading.Event()
-        self._last_media_event = 0.0
+        # device_id -> wall time of its last media event (burst events removed)
+        self._media_events: dict[str, float] = {}
+        # (t, device_id) of recent media events, for burst detection
+        self._recent_media: list[tuple[float, str]] = []
+        self._lock = threading.Lock()
         self._excluded_prefixes = tuple(
             cfg.get("arlo", {}).get("exclude_station_prefixes",
                                     DEFAULT_EXCLUDED_PREFIXES))
@@ -104,15 +116,32 @@ class ArloFetcher:
         if attr in ("mediaUploadNotification", "motionDetected", "lastImage",
                     "mediaObjectCount"):
             if attr in MEDIA_EVENTS:
-                self._last_media_event = time.time()
+                self._note_media_event(device.device_id)
             log(f"arlo: event {attr} from {device.name!r} -> sweep scheduled")
             self.sweep_wanted.set()
+
+    def _note_media_event(self, device_id: str) -> None:
+        now = time.time()
+        with self._lock:
+            self._recent_media = [(t, d) for t, d in self._recent_media
+                                  if now - t <= BURST_WINDOW_S]
+            self._recent_media.append((now, device_id))
+            burst = {d for _, d in self._recent_media}
+            if len(burst) >= BURST_MIN_CAMERAS:
+                # Library-refresh broadcast: retract the witness for everyone
+                # it touched, including cameras counted before the burst was
+                # recognisable.
+                for d in burst:
+                    if self._media_events.get(d, 0) >= now - BURST_WINDOW_S:
+                        self._media_events.pop(d, None)
+                return
+            self._media_events[device_id] = now
 
     def sweep(self) -> list[str]:
         """Download every cloud recording newer than each camera's cursor."""
         cursors = self._state.get("arlo_cursors", {})
         ingested = 0
-        newest_ms = 0
+        newest_by_cam: dict[str, int] = {}
         new_assets: list[str] = []
         for cam in self._arlo.cameras:
             if self.is_excluded(cam.name):
@@ -120,7 +149,8 @@ class ArloFetcher:
             cur = cursors.get(cam.device_id, 0)
             for vid in reversed(cam.last_n_videos(50) or []):
                 created_ms = int(vid.created_at or 0)
-                newest_ms = max(newest_ms, created_ms)
+                newest_by_cam[cam.device_id] = max(
+                    newest_by_cam.get(cam.device_id, 0), created_ms)
                 if created_ms <= cur:
                     continue
                 name = f"{cam.device_id}_{created_ms}.mp4"
@@ -140,37 +170,48 @@ class ArloFetcher:
         if ingested:
             log(f"arlo: sweep ingested {ingested} recording(s)")
         else:
-            self._assert_library_fresh(newest_ms)
+            self._assert_library_fresh(newest_by_cam, cursors)
         return new_assets
 
-    def _assert_library_fresh(self, newest_ms: int) -> None:
+    def _assert_library_fresh(self, newest_by_cam: dict[str, int],
+                              cursors: dict[str, int]) -> None:
         """A sweep that ingests nothing is normally just a quiet night -- but it
         is also exactly what a frozen media library looks like, and that
         failure is silent: pyaarlo serves each camera's cached video list, so
         `last_n_videos` keeps returning stale rows and nothing raises.
 
-        The event stream is the independent witness. A media event means a clip
-        reached the cloud, so a library whose newest recording predates that
-        event by hours is stale, not empty. Raise, so the daemon's consecutive-
-        failure counter and notify() path actually fire instead of the fetcher
-        reporting health while ingesting nothing.
+        The event stream is the independent witness, judged PER CAMERA: a
+        camera that reported a media upload, yet whose own newest library
+        recording predates that event by hours, is stale. Two kinds of false
+        witness are excluded:
+          * fleet-wide bursts (pyaarlo's library-refresh broadcast) -- dropped
+            in _note_media_event;
+          * cameras with no cursor, i.e. that have never produced a library
+            clip (offline/undeployed units still chatter on the event stream
+            without ever uploading anything).
 
         Only checked when nothing was ingested, so this can never discard work.
-        A wholly empty library (newest_ms == 0) is left alone -- it is the
-        legitimate state before the first recording lands.
         """
-        if not self._last_media_event or not newest_ms:
-            return
-        lag_s = self._last_media_event - newest_ms / 1000
-        if lag_s <= LIBRARY_STALE_AFTER_S:
-            return
-        newest = datetime.fromtimestamp(newest_ms / 1000, tz=timezone.utc)
-        raise RuntimeError(
-            f"media library appears frozen: newest recording is "
-            f"{newest.isoformat()}, but a media-upload event arrived "
-            f"{lag_s / 3600:.1f}h after it. The library cache has stopped "
-            f"refreshing -- restart the daemon."
-        )
+        with self._lock:
+            events = dict(self._media_events)
+        for dev, event_t in events.items():
+            if not cursors.get(dev):
+                continue
+            newest_ms = newest_by_cam.get(dev, 0)
+            if not newest_ms:
+                continue
+            lag_s = event_t - newest_ms / 1000
+            if lag_s <= LIBRARY_STALE_AFTER_S:
+                continue
+            newest = datetime.fromtimestamp(newest_ms / 1000, tz=timezone.utc)
+            name = next((c.name for c in self._arlo.cameras
+                         if c.device_id == dev), dev)
+            raise RuntimeError(
+                f"media library appears frozen: {name!r} newest recording is "
+                f"{newest.isoformat()}, but it reported a media upload "
+                f"{lag_s / 3600:.1f}h after that. The library cache has "
+                f"stopped refreshing -- restart the daemon."
+            )
 
     def _ingest_video(self, cam, vid, tmp: Path, created_ms: int) -> str | None:
         from hoseid.video import probe_safe

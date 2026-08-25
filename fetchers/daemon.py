@@ -11,7 +11,13 @@ Run:  .venv-fetch/bin/python -m fetchers.daemon [--once] [--backfill-hours N]
 Loop shape: Reveal polls on a fixed interval (no push channel exists; the
 cameras batch-transmit anyway). Arlo sweeps when the event stream reports
 media activity — debounced — and on a slow fixed interval as a catch-all.
-A source failing never stops the other; repeated failures alert via notify().
+A source failing never stops the other; repeated failures alert via notify(),
+and past FAILURE_RESTART_THRESHOLD the daemon exits non-zero so launchd's
+KeepAlive brings up a fresh process. Restart is the only known cure for the
+pyaarlo media-library freeze (see fetchers/arlo.py _assert_library_fresh):
+the library stopped refreshing twice in Aug 2026 and both times the daemon
+sat logging the same error for days -- 393 times the second time -- because
+"raise and alert" was the whole plan and nothing acted on the alert.
 """
 from __future__ import annotations
 
@@ -29,6 +35,13 @@ from fetchers.arlo import ArloFetcher  # noqa: E402
 from fetchers.common import State, load_config, log, notify  # noqa: E402
 
 FAILURE_ALERT_THRESHOLD = 5
+# Consecutive failures of one source after which the whole process exits so
+# launchd restarts it (KeepAlive=true, ThrottleInterval=60s). Eight arlo
+# sweeps = ~2h at the 15-min catch-all interval; a transient outage clears
+# long before that, a wedge never does. Reveal is included on purpose: its
+# failure modes have also been "stuck until restart" (the cursor wedge).
+FAILURE_RESTART_THRESHOLD = 8
+EXIT_RESTART = 3
 
 
 def main() -> int:
@@ -81,6 +94,16 @@ def main() -> int:
                 f"{type(e).__name__}: {e}")
             if failures[name] == FAILURE_ALERT_THRESHOLD:
                 notify(cfg, f"hoseid-fetch: {name} failing repeatedly: {e}")
+            if failures[name] >= FAILURE_RESTART_THRESHOLD and not args.once:
+                msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
+                       f"row; exiting for a launchd restart. Last: {e}")
+                log(msg)
+                notify(cfg, msg)
+                try:
+                    arlo.stop()
+                except Exception:
+                    pass
+                sys.exit(EXIT_RESTART)
             return []
 
     log(f"hoseid-fetch up (reveal every {reveal_interval}s, "
