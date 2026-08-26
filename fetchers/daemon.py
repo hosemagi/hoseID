@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fetchers import alerts  # noqa: E402
 from fetchers import reveal as reveal_mod  # noqa: E402
-from fetchers.arlo import ArloFetcher  # noqa: E402
+from fetchers.arlo import ArloFetcher, LibraryFrozenError  # noqa: E402
 from fetchers.common import State, load_config, log, notify  # noqa: E402
 
 FAILURE_ALERT_THRESHOLD = 5
@@ -94,7 +94,12 @@ def main() -> int:
                 f"{type(e).__name__}: {e}")
             if failures[name] == FAILURE_ALERT_THRESHOLD:
                 notify(cfg, f"hoseid-fetch: {name} failing repeatedly: {e}")
-            if failures[name] >= FAILURE_RESTART_THRESHOLD and not args.once:
+            # A frozen library never recovers without a re-login, so waiting
+            # out the threshold only adds hours of silent loss (5.5h on
+            # 2026-08-25). Restart on first detection.
+            restart_now = isinstance(e, LibraryFrozenError)
+            if (restart_now or failures[name] >= FAILURE_RESTART_THRESHOLD) \
+                    and not args.once:
                 msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
                        f"row; exiting for a launchd restart. Last: {e}")
                 log(msg)

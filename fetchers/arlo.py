@@ -32,6 +32,12 @@ MEDIA_EVENTS = ("mediaUploadNotification", "mediaObjectCount")
 # the sweep interval is 900s and uploads are not instant.
 LIBRARY_STALE_AFTER_S = 3600
 
+
+class LibraryFrozenError(RuntimeError):
+    """pyaarlo's media-library cache has stopped refreshing. Unlike a
+    transient outage this never clears on its own -- only a re-login does --
+    so the daemon restarts on the first detection rather than after N."""
+
 # pyaarlo re-derives every camera's media state from the library on its own
 # schedule (the midnight-local "captured today" rollover, reconnects) and fires
 # mediaUploadNotification on EVERY camera when it does -- no clip involved. Such
@@ -95,7 +101,15 @@ class ArloFetcher:
             synchronous_mode=True,
             library_days=2,
             stream_timeout=180,
-            reconnect_every=90,
+            # No periodic forced re-login. With reconnect_every=90 (minutes)
+            # every daemon lifetime on 2026-08-25 lost its REST session
+            # ~90-105 min after start: the event stream kept delivering
+            # upload events but every backend GET/POST returned None
+            # ("failed to read active mode", "error updating the image
+            # library"), so the library cache froze until a process restart.
+            # stream_timeout already reconnects the event stream on inactivity
+            # without touching the login.
+            reconnect_every=0,
         )
         if not self._arlo.is_connected:
             raise RuntimeError(f"arlo connect failed: {self._arlo.last_error}")
@@ -190,6 +204,13 @@ class ArloFetcher:
             clip (offline/undeployed units still chatter on the event stream
             without ever uploading anything).
 
+        A camera with a cursor but no recording in the library's current
+        window still counts: its cursor is the newest clip the library ever
+        served for it, so an upload event hours past the cursor with nothing
+        newer in the library is the same staleness. (Driveway's 19:27Z upload
+        on 2026-08-25 went unnoticed for four hours because it was skipped
+        here; the freeze was only caught when Crossroads recorded.)
+
         Only checked when nothing was ingested, so this can never discard work.
         """
         with self._lock:
@@ -197,16 +218,14 @@ class ArloFetcher:
         for dev, event_t in events.items():
             if not cursors.get(dev):
                 continue
-            newest_ms = newest_by_cam.get(dev, 0)
-            if not newest_ms:
-                continue
+            newest_ms = newest_by_cam.get(dev, 0) or cursors[dev]
             lag_s = event_t - newest_ms / 1000
             if lag_s <= LIBRARY_STALE_AFTER_S:
                 continue
             newest = datetime.fromtimestamp(newest_ms / 1000, tz=timezone.utc)
             name = next((c.name for c in self._arlo.cameras
                          if c.device_id == dev), dev)
-            raise RuntimeError(
+            raise LibraryFrozenError(
                 f"media library appears frozen: {name!r} newest recording is "
                 f"{newest.isoformat()}, but it reported a media upload "
                 f"{lag_s / 3600:.1f}h after that. The library cache has "
