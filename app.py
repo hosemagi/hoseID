@@ -195,6 +195,8 @@ def pipeline_images() -> dict:
                 "category": _CAT_CODE.get(d["detector_class"], d["detector_class"]),
                 "conf": d["detector_confidence"],
                 "bbox": [d["bbox_x"], d["bbox_y"], d["bbox_w"], d["bbox_h"]],
+                # sampled frame the video's detections describe; None for stills
+                "frame_offset_s": d["frame_offset_s"],
             })
             if d["taxon"]:
                 species.append({"det_index": i, "taxon": d["taxon"],

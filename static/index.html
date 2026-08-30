@@ -103,6 +103,7 @@
 </main>
 <script>
 let PRESETS = [], NO_COUNT = [], CFG = {}, queue = [], pos = 0, showBoxes = true;
+let videoFrame = null;               // sampled-frame offset (s) for the current video item; boxes describe that one frame
 let sel = new Map();                 // tag -> count
 let ZONES = {};                      // device_id -> active zones
 let SUPPRESSED = {};                 // device_id -> total suppressed count
@@ -204,10 +205,15 @@ async function show() {
     img.style.display = 'none';
     vid.style.display = 'block';
     vid.src = '/images/' + encodeURI(item.image);
-    vid.play().catch(() => {});
-    drawBoxes(null);   // boxes belong to one sampled frame; skip overlay on video
+    videoFrame = (item.detections.find(d => d.frame_offset_s != null) || {}).frame_offset_s ?? null;
+    if (videoFrame != null) {
+      try { vid.currentTime = videoFrame; } catch (e) { /* metadata not ready; seeked will land at 0 */ }
+    } else {
+      vid.play().catch(() => {});   // no sampled frame (e.g. decode failed): no boxes, just play
+    }
   } else {
     vid.pause(); vid.removeAttribute('src'); vid.style.display = 'none';
+    videoFrame = null;
     img.style.display = 'block';
     img.onload = () => drawBoxes(item);
     img.src = '/images/' + encodeURI(item.image);
@@ -219,6 +225,7 @@ async function show() {
   $('meta').textContent =
     `${who} · ${dt} · MD eff ${eff.toFixed(2)}` +
     (isVideo ? ' · video' : '') +
+    (isVideo && videoFrame != null ? ` · boxes @ ${videoFrame.toFixed(1)}s` : '') +
     ` · ${pos + 1}/${queue.length}` + (item.review ? ' · previously reviewed' : '');
   paintZonePanel(item.device_id);
   const nxt = queue[pos + 1];
@@ -268,10 +275,14 @@ async function postZones(device, boxes, confirmed = false) {
   drawBoxes(queue[pos]); paintZonePanel(device);
 }
 
+function boxMedia() {
+  return $('clip').style.display !== 'none' ? $('clip') : $('photo');
+}
+
 function drawBoxes(item) {
   document.querySelectorAll('.box,.zone').forEach(b => b.remove());
   if (!item) return;
-  const img = $('photo'), W = img.clientWidth, H = img.clientHeight;
+  const m = boxMedia(), W = m.clientWidth, H = m.clientHeight;
   const zones = ZONES[item.device_id] || [];
   if (showBoxes) {
     for (const z of zones) {
@@ -373,6 +384,16 @@ $('sync').onclick = async () => {
 };
 ['fStatus', 'fDevice', 'fSort'].forEach(id => $(id).onchange = loadQueue);
 window.addEventListener('resize', () => queue[pos] && drawBoxes(queue[pos]));
+
+// Boxes describe ONE sampled frame: draw while the clip sits on it, hide once
+// the reviewer plays or scrubs away (stale boxes would point at the wrong frame).
+$('clip').addEventListener('seeked', () => {
+  const item = queue[pos];
+  if (!item) return;
+  const near = videoFrame != null && Math.abs($('clip').currentTime - videoFrame) < 1.0;
+  if (near) drawBoxes(item);
+  else document.querySelectorAll('.box,.zone').forEach(b => b.remove());
+});
 
 loadConfig().then(loadQueue);
 </script>
