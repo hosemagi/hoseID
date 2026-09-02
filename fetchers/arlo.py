@@ -38,6 +38,15 @@ class LibraryFrozenError(RuntimeError):
     transient outage this never clears on its own -- only a re-login does --
     so the daemon restarts on the first detection rather than after N."""
 
+
+class SessionDeadError(RuntimeError):
+    """The Arlo cloud has expired our REST session: every GET/POST returns
+    401 until a fresh login. Observed ~90-120 min after each login since
+    2026-08-20, with reconnect_every=90 AND with it disabled, so this is
+    server-side token expiry, not pyaarlo's forced relogin. Nothing
+    in-process recovers it (the reconnect_every relogin came back
+    untrusted, error 9204), so the daemon restarts on first detection."""
+
 # pyaarlo re-derives every camera's media state from the library on its own
 # schedule (the midnight-local "captured today" rollover, reconnects) and fires
 # mediaUploadNotification on EVERY camera when it does -- no clip involved. Such
@@ -68,6 +77,8 @@ class BridgeIMAP4(imaplib.IMAP4):
 imaplib.IMAP4_SSL = BridgeIMAP4
 
 import pyaarlo  # noqa: E402  (after the IMAP patch)
+from pyaarlo.constant import DEVICES_PATH  # noqa: E402
+from pyaarlo.util import time_to_arlotime  # noqa: E402
 
 
 class ArloFetcher:
@@ -153,6 +164,7 @@ class ArloFetcher:
 
     def sweep(self) -> list[str]:
         """Download every cloud recording newer than each camera's cursor."""
+        self._assert_session_alive()
         cursors = self._state.get("arlo_cursors", {})
         ingested = 0
         newest_by_cam: dict[str, int] = {}
@@ -186,6 +198,25 @@ class ArloFetcher:
         else:
             self._assert_library_fresh(newest_by_cam, cursors)
         return new_assets
+
+    def _assert_session_alive(self) -> None:
+        """A dead REST session is silent everywhere downstream: last_n_videos
+        serves each camera's cached list, sweeps 'succeed' with nothing
+        ingested, and the freeze guard's per-camera witnesses stop arriving
+        because event delivery dies with the same session (2026-08-30..09-01:
+        two days of 401 on every request, zero guard detections). One
+        authenticated GET is the direct check; None means the request failed.
+        """
+        probe = DEVICES_PATH + f"?t={time_to_arlotime()}"
+        for attempt in (1, 2):
+            if self._arlo.be.get(probe) is not None:
+                return
+            if attempt == 1:
+                time.sleep(10)  # ride out a transient cloud blip
+        raise SessionDeadError(
+            "Arlo REST probe failed twice (GET devices returned None): the "
+            "session has expired server-side and only a fresh login clears "
+            "it -- restart the daemon.")
 
     def _assert_library_fresh(self, newest_by_cam: dict[str, int],
                               cursors: dict[str, int]) -> None:
