@@ -43,6 +43,14 @@ FAILURE_ALERT_THRESHOLD = 5
 # failure modes have also been "stuck until restart" (the cursor wedge).
 FAILURE_RESTART_THRESHOLD = 8
 EXIT_RESTART = 3
+# Arlo expires every REST session ~90-120 min after login (fetchers/arlo.py
+# SessionDeadError), so a SessionDeadError restart is the designed steady
+# state (~12/day) and must not page anyone: on 2026-09-02 the restart path
+# pushed eleven "arlo failed 1x in a row; exiting" alerts in one day through
+# the wildlife ntfy topic, which read as an outage while ingest was healthy.
+# A session that dies well inside the expected window is a different problem
+# (Arlo rejecting the login, rate limiting, 2FA pushback) and still pages.
+SESSION_EXPIRY_EXPECTED_AFTER_S = 60 * 60
 
 
 def main() -> int:
@@ -70,6 +78,7 @@ def main() -> int:
         log(f"reveal: cursor backfilled {backfill_h}h -> {cutoff}")
 
     arlo.connect()
+    login_at = time.time()
     if state.get("arlo_cursors") is None:
         if backfill_h:
             cutoff = int((time.time() - backfill_h * 3600) * 1000)
@@ -105,7 +114,13 @@ def main() -> int:
                 msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
                        f"row; exiting for a launchd restart. Last: {e}")
                 log(msg)
-                notify(cfg, msg)
+                session_age = time.time() - login_at
+                if (isinstance(e, SessionDeadError)
+                        and session_age >= SESSION_EXPIRY_EXPECTED_AFTER_S):
+                    log(f"{name}: session lived {session_age / 60:.0f} min; "
+                        "routine Arlo expiry, restarting without alert")
+                else:
+                    notify(cfg, msg)
                 try:
                     arlo.stop()
                 except Exception:
