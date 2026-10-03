@@ -33,6 +33,15 @@ from SpeciesNet at 92.7%, direction is derivable from bbox movement across a bur
 remaining attributes were never measured and are better covered by P's own tagging. See
 `~/.claude/scratch/spike/vision-model-findings.md` for the measurement record.
 
+Camera renamed or moved? Follow `docs/CAMERA_RENAMES.md` — station names live in five places.
+
+## Wildlife MCP (read-only)
+
+`python -m hoseid.mcp_wildlife.app` serves the sighting log over MCP on port 8853: list and
+summarise sightings by date / species / station / time of day, and pull the capture image or
+capture images behind any sighting (batch, with re-ID reference frames). Plist in `config/`, docs in `src/hoseid/mcp_wildlife/README.md`,
+install with `.[mcp]`.
+
 ## Quick start
 
 ```bash

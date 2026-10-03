@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .venv-fetch/
 logs/
+
+# self-signed TLS for the wildlife MCP (regenerated on first run)
+data/ssl/

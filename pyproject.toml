@@ -18,6 +18,16 @@ dependencies = [
 [project.scripts]
 hoseid = "hoseid.cli:cli"
 
+[project.optional-dependencies]
+# Wildlife MCP server (python -m hoseid.mcp_wildlife.app). Main venv only;
+# never install this extra into the detector/classifier venvs.
+mcp = [
+    "mcp>=1.27,<2",
+    "uvicorn>=0.20",
+    "starlette>=0.40",
+    "pillow>=10",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

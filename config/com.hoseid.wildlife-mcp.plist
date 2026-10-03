@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Wildlife MCP server (Streamable HTTP, port 8853). READ-ONLY.
+
+  Exposes tags/wildlife.db (the sighting log) over MCP: list/summarise
+  sightings by date, species, station, time of day; pull the capture
+  images / video clips behind a sighting. Opens the DB mode=ro; the only
+  files it writes are preview JPEGs under ~/trailcam/derived/mcp-previews.
+
+  Auth:
+    None. Same posture as com.hose.hoselm-sage-mcp (:8852) - ZeroTier/LAN
+    is the perimeter. Not on the WAN allowlist.
+
+  Claude Desktop:
+    Its Settings-page connector form insists on https and probes the URL
+    from Anthropic's cloud, so it cannot reach a ZeroTier server. Use the
+    mcp-remote stdio bridge in claude_desktop_config.json on the client Mac
+    (same as the hoselm corpus connector on :8851):
+      "wildlife": {"command": "npx", "args": ["-y", "mcp-remote",
+                   "http://10.159.206.106:8853/mcp", "--allow-http"]}
+    WILDLIFE_MCP_TLS=1 enables an optional self-signed https mode (see
+    hoseid.mcp_wildlife.app docstring).
+
+  To install:
+    cp config/com.hoseid.wildlife-mcp.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hoseid.wildlife-mcp.plist
+
+  To restart after code change:
+    launchctl kickstart -k gui/$(id -u)/com.hoseid.wildlife-mcp
+
+  To restart after plist change:
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.hoseid.wildlife-mcp.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hoseid.wildlife-mcp.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hoseid.wildlife-mcp</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/hosebot/projects/hoseID/.venv/bin/python</string>
+        <string>-m</string>
+        <string>hoseid.mcp_wildlife.app</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/hosebot/projects/hoseID</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/hosebot/logs/hoseid-wildlife-mcp.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hosebot/logs/hoseid-wildlife-mcp.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/hosebot/projects/hoseID/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>WILDLIFE_MCP_HOST</key>
+        <string>0.0.0.0</string>
+        <key>WILDLIFE_MCP_PORT</key>
+        <string>8853</string>
+        <key>WILDLIFE_MCP_TLS</key>
+        <string>0</string>
+        <key>HOSEID_REVIEW_URL</key>
+        <string>http://nvlm:8870</string>
+        <key>WILDLIFE_MCP_MAX_INLINE_MB</key>
+        <string>8</string>
+    </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
