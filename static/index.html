@@ -88,6 +88,9 @@
         <option value="">confidence…</option><option>confirmed</option>
         <option>assumed</option><option>by_elimination</option>
         <option>unconfirmed</option></select>
+      <select id="sex" title="ctrl+M male · ctrl+F female · same key again clears" style="flex:0 0 auto;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
+        <option value="">sex: not set</option><option value="M">♂ male</option>
+        <option value="F">♀ female</option></select>
     </div>
     <textarea id="notes" placeholder="notes… (n to focus, Esc to leave)"></textarea>
     <button id="save">save &amp; next&nbsp;&nbsp;⏎</button>
@@ -96,6 +99,7 @@
       letter = tag, again = +1, <kbd>⇧</kbd>+letter = −1 · <kbd>space</kbd> play/pause video ·
       <kbd>⌫</kbd> empty+next · <kbd>⏎</kbd> save+next · <kbd>←</kbd><kbd>→</kbd>/<kbd>z</kbd> nav ·
       <kbd>x</kbd> boxes · <kbd>n</kbd> notes · <kbd>h</kbd> status ·
+      <kbd>⌃M</kbd>/<kbd>⌃F</kbd> sex ·
       click box = exclude it · <kbd>a</kbd> = exclude ALL boxes · click zone = remove
     </div>
     <div id="saved">saved ✓</div>
@@ -190,6 +194,7 @@ async function show() {
   $('notes').value = item.review ? item.review.notes : '';
   $('indiv').value = (item.review && item.review.individual) || '';
   $('indivConf').value = (item.review && item.review.individual_confidence) || '';
+  $('sex').value = (item.review && item.review.sex) || '';
   paintTags();
   if (item.species && item.species.length) {
     const best = {};
@@ -332,11 +337,13 @@ async function save(advance = true) {
   const body = { asset_id: item.asset_id, tags: [...sel.keys()], counts,
     individual: $('indiv').value || null,
     individual_confidence: $('indivConf').value || null,
+    sex: $('sex').value || null,
     notes: $('notes').value };
   await api('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body) });
   item.review = { tags: [...sel.keys()], counts, notes: $('notes').value,
-    individual: body.individual, individual_confidence: body.individual_confidence };
+    individual: body.individual, individual_confidence: body.individual_confidence,
+    sex: body.sex };
   flashSaved();
   if (advance) { pos++; show(); }
 }
@@ -347,6 +354,15 @@ function flashSaved() {
 }
 
 document.addEventListener('keydown', ev => {
+  // ctrl+M / ctrl+F set sex (same key again clears); saved with the review.
+  // Matches the wildlife log page's hotkeys. Works from the notes box too.
+  const sk = ev.key.toLowerCase();
+  if (ev.ctrlKey && !ev.metaKey && !ev.altKey && (sk === 'm' || sk === 'f')) {
+    ev.preventDefault();
+    const v = sk.toUpperCase();
+    $('sex').value = $('sex').value === v ? '' : v;
+    return;
+  }
   if (ev.target === $('notes')) {
     if (ev.key === 'Escape') $('notes').blur();
     if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); save(); }

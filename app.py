@@ -36,6 +36,7 @@ import sqlite3
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -108,6 +109,10 @@ def init_db():
             conn.execute("ALTER TABLE reviews ADD COLUMN individual TEXT")
             conn.execute("ALTER TABLE reviews ADD COLUMN"
                          " individual_confidence TEXT")
+        if "sex" not in cols:
+            # M / F; NULL = not set. Carried into the wildlife log by
+            # scripts/sync_wildlife_log.py
+            conn.execute("ALTER TABLE reviews ADD COLUMN sex TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS exclusion_zones (
                 id INTEGER PRIMARY KEY,
@@ -315,6 +320,7 @@ class ReviewIn(BaseModel):
     counts: dict[str, int] = {}   # tag -> count, only for counts > 1
     individual: str | None = None
     individual_confidence: str | None = None
+    sex: Literal["M", "F"] | None = None
     notes: str = ""
 
 
@@ -516,6 +522,7 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
             {"tags": json.loads(r["tags"]), "counts": json.loads(r["counts"]),
              "individual": r["individual"],
              "individual_confidence": r["individual_confidence"],
+             "sex": r["sex"],
              "notes": r["notes"], "reviewed_at": r["reviewed_at"]} if r else None
         )
         items.append(item)
@@ -564,12 +571,12 @@ def review(r: ReviewIn):
     with db() as conn:
         conn.execute(
             "INSERT INTO reviews (asset_id, basename, image, device_id, captured_at,"
-            " tags, counts, individual, individual_confidence, notes,"
-            " md_max_conf, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " tags, counts, individual, individual_confidence, sex, notes,"
+            " md_max_conf, reviewed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (im["asset_id"], im["basename"], im["image"], im["device_id"],
              im["captured_at"],
              json.dumps(sorted(r.tags)), json.dumps(counts), r.individual,
-             r.individual_confidence, r.notes.strip(),
+             r.individual_confidence, r.sex, r.notes.strip(),
              im["md_max_conf"], now_iso()),
         )
     return {"ok": True}

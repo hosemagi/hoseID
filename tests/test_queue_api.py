@@ -105,3 +105,23 @@ def test_unreviewed_status_returns_video_item(env):
     _seed(env, VID, ".mp4", media_type="video", offset=3.5, taxon="black bear",
           conf=0.94, bbox=[0.1, 0.2, 0.4, 0.5], cap_time="2026-08-28T04:12:07")
     assert "capture:" + VID in _items(status="unreviewed")
+
+
+def test_review_round_trips_sex(env):
+    """Sex set at review time is stored and comes back on the queue item;
+    leaving it out means not set."""
+    _seed(env, IMG, ".jpg", media_type="image", offset=None, taxon="white-tailed deer",
+          conf=0.88, bbox=[0.3, 0.1, 0.2, 0.3], cap_time="2026-08-29T05:00:00")
+    _seed(env, VID, ".mp4", media_type="video", offset=3.5, taxon="black bear",
+          conf=0.94, bbox=[0.1, 0.2, 0.4, 0.5], cap_time="2026-08-28T04:12:07")
+    app.review(app.ReviewIn(asset_id="capture:" + IMG, tags=["deer"], sex="F"))
+    app.review(app.ReviewIn(asset_id="capture:" + VID, tags=["bear"]))
+    items = _items(status="reviewed")
+    assert items["capture:" + IMG]["review"]["sex"] == "F"
+    assert items["capture:" + VID]["review"]["sex"] is None
+
+
+def test_review_rejects_unknown_sex():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        app.ReviewIn(asset_id="x", tags=["deer"], sex="male")

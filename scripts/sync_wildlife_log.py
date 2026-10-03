@@ -99,6 +99,10 @@ def main() -> int:
     if "media_refs" not in {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}:
         wl.execute("ALTER TABLE sightings ADD COLUMN media_refs TEXT"
                    " NOT NULL DEFAULT '[]'")
+    if "sex" not in {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}:
+        # M / F; NULL = not set. hoseserv's wildlife API adds it the same way
+        wl.execute("ALTER TABLE sightings ADD COLUMN sex TEXT"
+                   " CHECK (sex IN ('M','F'))")
     tags = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
     tags.row_factory = sqlite3.Row
     det = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True) \
@@ -113,7 +117,7 @@ def main() -> int:
     claimed = claimed_refs(wl) if args.backfill else set()
     reviews = tags.execute(
         "SELECT * FROM reviews WHERE id > ? ORDER BY id", (since,)).fetchall()
-    added = skipped_claimed = 0
+    added = skipped_claimed = sex_filled = 0
     max_id = watermark
     for r in reviews:
         max_id = max(max_id, r["id"])
@@ -161,11 +165,19 @@ def main() -> int:
         cols = r.keys()
         indiv = r["individual"] if "individual" in cols else None
         indiv_conf = r["individual_confidence"] if "individual_confidence" in cols else None
+        sex = r["sex"] if "sex" in cols else None
         for sp in sorted(species_tags):
             dup = wl.execute(
                 "SELECT 1 FROM sightings WHERE capture_asset_id=? AND species=?",
                 (asset_id, sp)).fetchone() if asset_id else None
             if dup:
+                # a re-review that adds sex fills it in, but never overrides
+                # a value already set (possibly by hand) in the log
+                if sex:
+                    sex_filled += wl.execute(
+                        "UPDATE sightings SET sex=? WHERE capture_asset_id=?"
+                        " AND species=? AND sex IS NULL",
+                        (sex, asset_id, sp)).rowcount
                 continue
             if not media and asset_id.startswith("sha256:"):
                 digest = asset_id.split(":", 1)[1]
@@ -178,10 +190,10 @@ def main() -> int:
             wl.execute(
                 "INSERT INTO sightings (date, time, station, species, count,"
                 " source, category, capture_asset_id, auto, individual,"
-                " individual_confidence, notes, media_refs)"
-                " VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?)",
+                " individual_confidence, sex, notes, media_refs)"
+                " VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)",
                 (date, time, station, sp, counts.get(sp, 1), "camera",
-                 CATEGORY.get(sp, "other"), asset_id, indiv, indiv_conf,
+                 CATEGORY.get(sp, "other"), asset_id, indiv, indiv_conf, sex,
                  r["notes"] or "", json.dumps(media)))
             added += 1
 
@@ -189,6 +201,8 @@ def main() -> int:
                (str(max_id),))
     wl.commit()
     extra = f", {skipped_claimed} skipped (already in log)" if args.backfill else ""
+    if sex_filled:
+        extra += f", sex filled on {sex_filled} existing"
     print(f"wildlife-log sync: {len(reviews)} reviews scanned, {added} sightings "
           f"added{extra}, watermark {watermark} -> {max_id}")
     return 0
