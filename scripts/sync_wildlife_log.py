@@ -44,11 +44,23 @@ CATEGORY = {
     "jackrabbit": "small_game", "squirrel": "small_game", "skunk": "small_game",
 }
 
+# Camera renames (old vendor label -> current log station). detections.db
+# captures written BEFORE the rename (and before station_overrides.json got
+# the device entry) still carry the old label; this keeps the log on the new
+# names. Add a line per rename; see docs/CAMERA_RENAMES.md.
+STATION_RENAMES = {
+    "South Clearing": "Lost Woods",      # 2026-09-12
+    "CB5": "Enchanted Forest",           # 2026-09-12
+    "CB6": "Cliffside",                  # 2026-09-12
+    "CB7": "Trailer Path",               # 2026-09-12
+    "CB8": "North Entry",                # 2026-09-12
+}
+
 # P's device->station mapping (2026-08-16) for the legacy Reveal corpus,
 # whose reviews carry only a device id. Mirrors ~/trailcam/landing/stations.json.
 DEVICE_STATION = {
     "016579006078088": "Storm Oak",
-    "016579006023894": "South Clearing",
+    "016579006023894": "Lost Woods",   # was South Clearing until 2026-09-12
     "016579006127489": "Bench",
     "016579006157692": "North Oak",
 }
@@ -68,8 +80,9 @@ def normalize_station(name: str, date: str | None = None) -> str:
     if name == "Cabin - Yard":
         return "Cabin Yard"
     if name.startswith("Cabin - "):
-        return name[len("Cabin - "):]
-    return DEVICE_STATION.get(name, name)
+        name = name[len("Cabin - "):]
+    name = DEVICE_STATION.get(name, name)
+    return STATION_RENAMES.get(name, name)
 
 
 def claimed_refs(wl: sqlite3.Connection) -> set[str]:
