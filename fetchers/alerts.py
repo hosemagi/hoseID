@@ -1,26 +1,31 @@
-"""Real-time detection alerts: fresh captures → immediate pipeline pass →
-ntfy push (with image) when something alert-worthy appears.
+"""Real-time detection events: fresh captures → immediate pipeline pass →
+one hoseflow webhook event per detection, where the alert rules live.
 
 Closes the latency gap between the fetch daemon (minutes after capture) and
 the 02:30 nightly analysis (hours). After each ingest batch the daemon runs
 the SAME incremental pipeline as the nightly — detect + classify under the
 standing run_id, serialized by a lock file so concurrent invocations (or the
-02:30 run) never fight over detections.db — then applies the alert rules to
-just the new assets.
+02:30 run) never fight over detections.db — then forwards just the new
+assets' detections.
 
-Alert policy (config [alerts] in credentials.toml, defaults below):
-  - always-alert taxa regardless of confidence: mountain_lion, unknown_felid,
-    unknown_carnivore (invariant-4 alignment: a rolled-up lion must reach P)
-  - bear at detector conf >= bear_min_conf
-  - person detections during night hours (family asleep; daytime people are
-    usually family)
-  - notify_taxa: species worth a heads-up but not a page (e.g. wild_turkey),
-    sent at default priority
-  - review-layer exclusion zones apply (the trampoline never pages anyone)
-  - per (station, species) cooldown so a feeding bear is one alert, not forty
+What stays here: detection, classification and the review-layer exclusion
+zones (the trampoline never reaches anyone — the zones need tags.db geometry).
+Every other detection is forwarded unfiltered by species (invariant 4).
 
-Notifications go direct to ntfy (P's established pattern) as a PUT with the
-detection crop attached, so the phone notification carries the image.
+What moved to hoseflow (rules on nvlm, editable in the hoseflow UI): which
+taxa page, thresholds, night hours, priority, per (station, reason) cooldown,
+and delivery via hosenotify with the crop attached. hoseflow's alert level
+also modulates priority (RED prefixes titles / raises priority).
+
+Config [alerts] in credentials.toml:
+  hoseflow_url      webhook URL (default: local hoseserv, device wildlife-webhook)
+  hoseflow_api_key  hoseserv AUTH_SECRET (X-Api-Key)
+  ntfy_server/ntfy_topic are still read by common.notify() for operator alerts.
+
+There is no direct-ntfy fallback (deliberate hard cutover). If the webhook
+fails WEBHOOK_FAIL_ALERT_AFTER times in a row, one operator alert goes out
+through common.notify() — which talks to ntfy directly, so it still works when
+hoseserv or hosenotify is the thing that's down.
 """
 from __future__ import annotations
 
@@ -28,14 +33,14 @@ import fcntl
 import json
 import sqlite3
 import subprocess
-import time
 import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+import urllib3
 
-from .common import State, log
+from .common import State, log, notify
 
 REPO = Path(__file__).resolve().parents[1]
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
@@ -45,24 +50,18 @@ ASSETS = Path.home() / "trailcam/landing/assets"
 PIPELINE_LOCK = Path.home() / "trailcam/derived/.pipeline.lock"
 LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
+DEFAULT_WEBHOOK = "https://127.0.0.1:8000/api/v1/hoseflow/webhooks/wildlife-webhook"
+WEBHOOK_FAIL_ALERT_AFTER = 3
 
-def _local_hhmm(capture_time_iso: str) -> str:
+# Loopback to hoseserv's self-signed cert; verify=False is scoped to that call.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _local_capture_time(capture_time_iso: str) -> datetime:
     t = datetime.fromisoformat(capture_time_iso)
     if t.tzinfo is None:
         t = t.replace(tzinfo=timezone.utc)
-    return t.astimezone(LOCAL_TZ).strftime("%H:%M")
-
-DEFAULTS = {
-    "ntfy_server": "https://ntfy.sh",
-    "ntfy_topic": "",
-    "always_taxa": ["mountain_lion", "unknown_felid", "unknown_carnivore"],
-    "bear_taxa": ["black_bear"],
-    "bear_min_conf": 0.5,
-    "night_person": True,
-    "night_hours": [22, 6],          # local, start/end
-    "notify_taxa": [],               # default-priority species alerts
-    "cooldown_min": 30,
-}
+    return t.astimezone(LOCAL_TZ)
 
 
 def run_pipeline_incremental(timeout_s: int = 900) -> bool:
@@ -124,43 +123,82 @@ def _alert_image(det, digest) -> Path | None:
     return hits[0] if hits else None
 
 
-def _ascii(s: str) -> str:
-    """HTTP headers are latin-1; ntfy titles must survive ASCII-only clients."""
-    return s.replace("\u2014", "-").encode("ascii", "replace").decode()
+def build_event(det, cap, device_id: str | None, image: Path | None) -> dict:
+    """The webhook payload hoseflow rules match on and template from."""
+    taxon = det["taxon"] or ""
+    conf = det["detector_confidence"]
+    local = _local_capture_time(cap["capture_time"])
+    label = taxon.replace("_", " ") if taxon else det["detector_class"]
+    return {
+        "asset_id": cap["asset_id"],
+        "station": cap["station"],
+        "device_id": device_id or "",
+        "taxon": taxon,
+        "detector_class": det["detector_class"],
+        "confidence": round(conf, 4),
+        "confidence_pct": f"{conf:.0%}",
+        "label": label,
+        "reason": taxon or det["detector_class"],
+        "capture_time": cap["capture_time"],
+        "capture_hhmm": local.strftime("%H:%M"),
+        # capture hour (not processing hour): a 05:50 capture ingested at
+        # 06:10 is still a night capture
+        "capture_hour": local.hour,
+        "media_type": cap["media_type"],
+        "video_suffix": " [VIDEO]" if cap["media_type"] == "video" else "",
+        "image_path": str(image) if image else "",
+    }
 
 
-def _notify(cfg: dict, title: str, message: str, priority: str,
-            tags: str, image: Path | None) -> bool:
-    url = f"{cfg['ntfy_server'].rstrip('/')}/{cfg['ntfy_topic']}"
-    headers = {"Title": _ascii(title), "Message": _ascii(message),
-               "Priority": priority, "Tags": tags}
+def _post_event(cfg: dict, event: dict) -> dict | None:
+    """POST one event; returns hoseflow's {fired, results} or None on failure."""
+    url = cfg.get("hoseflow_url") or DEFAULT_WEBHOOK
     try:
-        if image is not None:
-            headers["Filename"] = image.name
-            resp = requests.put(url, data=image.read_bytes(), headers=headers,
-                                 timeout=30)
-        else:
-            resp = requests.post(url, data=_ascii(message).encode(), headers={
-                "Title": _ascii(title), "Priority": priority, "Tags": tags},
-                timeout=30)
+        resp = requests.post(url, json=event, timeout=30, verify=False,
+                             headers={"X-Api-Key": cfg.get("hoseflow_api_key", "")})
         resp.raise_for_status()
-        return True
+        return resp.json()
     except Exception as e:
-        log(f"alerts: ntfy send failed: {type(e).__name__}: {e}")
-        return False
+        log(f"alerts: ERROR hoseflow webhook failed: {type(e).__name__}: {e}")
+        return None
+
+
+def _sent(response: dict) -> int:
+    return sum(1 for rule in (response.get("results") or {}).values()
+               for r in rule.values() if str(r).startswith("notification:sent"))
+
+
+def _track_failures(cfg_all: dict, state: State, failed: list[dict]) -> None:
+    """Count consecutive failed batches; raise one operator alert at the
+    threshold and one on recovery."""
+    streak = state.get("alert_webhook_failures", 0)
+    if not failed:
+        if streak >= WEBHOOK_FAIL_ALERT_AFTER:
+            notify(cfg_all, "hoseflow webhook recovered; wildlife alerts flowing again",
+                   title="hoseid alerts recovered")
+        if streak:
+            state.set("alert_webhook_failures", 0)
+        return
+    streak += 1
+    state.set("alert_webhook_failures", streak)
+    if streak == WEBHOOK_FAIL_ALERT_AFTER:
+        seen = sorted({f"{e['label']} @ {e['station']}" for e in failed})
+        notify(cfg_all,
+               f"hoseflow webhook failing ({streak} batches in a row); wildlife "
+               f"alerts are NOT being delivered. Undelivered: {', '.join(seen)[:300]}",
+               title="hoseid alerts DOWN")
 
 
 def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
-    """Apply alert rules to freshly processed assets; returns alerts sent."""
-    cfg = {**DEFAULTS, **cfg_all.get("alerts", {})}
-    if not cfg["ntfy_topic"] or not asset_ids:
+    """Forward fresh detections to hoseflow; returns notifications sent."""
+    cfg = cfg_all.get("alerts", {})
+    if not asset_ids:
         return 0
     conn = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     zones = _active_zones()
-    cooldowns = state.get("alert_cooldowns", {})
-    now = time.time()
     sent = 0
+    failed: list[dict] = []
 
     for asset_id in asset_ids:
         cap = conn.execute(
@@ -170,48 +208,24 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
             continue
         digest = asset_id.split(":", 1)[1]
         device = _device_for(digest)
-        local_hour = int(time.localtime().tm_hour)
-        n0, n1 = cfg["night_hours"]
-        is_night = local_hour >= n0 or local_hour < n1
 
         for det in conn.execute(
                 "SELECT * FROM detections WHERE asset_id=? AND run_id=?",
                 (asset_id, cap["run_id"])):
             if _in_zone(det, device, zones):
                 continue
-            taxon = det["taxon"] or ""
-            conf = det["detector_confidence"]
-            reason = priority = None
-            if taxon in cfg["always_taxa"]:
-                reason, priority = taxon, "urgent"
-            elif taxon in cfg["bear_taxa"] and conf >= cfg["bear_min_conf"]:
-                reason, priority = "bear", "high"
-            elif (cfg["night_person"] and det["detector_class"] == "person"
-                  and conf >= 0.5 and is_night):
-                reason, priority = "person (night)", "high"
-            elif taxon in cfg["notify_taxa"]:
-                reason, priority = taxon, "default"
-            if reason is None:
+            event = build_event(det, cap, device, _alert_image(det, digest))
+            response = _post_event(cfg, event)
+            if response is None:
+                failed.append(event)
                 continue
-            key = f"{cap['station']}|{reason}"
-            if now - cooldowns.get(key, 0) < cfg["cooldown_min"] * 60:
-                continue
-            cooldowns[key] = now
-            state.set("alert_cooldowns", cooldowns)
-            label = taxon.replace("_", " ") if taxon else det["detector_class"]
-            title = f"{label} - {cap['station']}"
-            msg = (f"{label} at {cap['station']}, {conf:.0%}, "
-                   f"{_local_hhmm(cap['capture_time'])}"
-                   + (" [VIDEO]" if cap["media_type"] == "video" else ""))
-            emoji = ("lion" if "lion" in reason or "felid" in reason
-                     else "bear" if reason == "bear"
-                     else "turkey" if "turkey" in reason
-                     else "rotating_light")
-            if _notify(cfg, title, msg, priority, emoji,
-                       _alert_image(det, digest)):
-                log(f"alerts: SENT [{priority}] {title}")
-                sent += 1
-            else:
-                log(f"alerts: FAILED to send [{priority}] {title}")
+            n = _sent(response)
+            sent += n
+            if response.get("results"):
+                log(f"alerts: {event['label']} @ {event['station']} -> "
+                    f"{json.dumps(response['results'])}")
+            if n:
+                log(f"alerts: SENT {n} for {event['label']} - {event['station']}")
     conn.close()
+    _track_failures(cfg_all, state, failed)
     return sent
