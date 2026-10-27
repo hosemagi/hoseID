@@ -46,6 +46,25 @@
 - After editing it, restart the fetch daemon:
   `sudo launchctl kickstart -k system/com.hoseid.fetch`.
 
+## Buck/doe model (training/sex/, see its README)
+- Labels are the hand-reviewed wildlife-log sex tags, all confirmed by the
+  operator: M = at least one buck in the capture, F = no buck. So every crop
+  in an F capture is a doe/fawn; in a multi-deer M capture you don't know
+  which crop is the buck (those are eval-only, scored as max over crops).
+- Venvs: run the scripts with `.venv-classifier` (torch + PIL + requests);
+  `detect_legacy.py` with `.venv-detector`. There is no sklearn in
+  .venv-classifier and none should be added (protobuf conflicts) — heads are
+  plain torch. Tests run with `~/venvs/megadetector`.
+- Split by whole visit (stratified by station x label x day/night), never by
+  crop: frames of one visit are near-duplicates. Pick models on train-split
+  CV; the held-out eval is for reporting, not for choosing.
+- `retrain.sh` and `promote.py` (no flags) send a real email to the operator
+  (or an ntfy ping when Mail Bridge is down) and repoint `current` — don't run
+  them just to test. Use `mail_report.py --dry-run <file>` and the unit tests
+  (`tests/test_sex_promote.py`, which stub notify/mail).
+- Outputs only under `~/trailcam/derived/training/sex/`; the 3 newest runs
+  are kept, plus `current`. Monthly LaunchDaemon `com.hoseid.sex-retrain`.
+
 ## Gotchas
 - pipeline cache in app.py is keyed by file mtime; reset it directly in
   tests rather than touching files.
