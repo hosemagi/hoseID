@@ -131,6 +131,9 @@ def root(tmp_path, monkeypatch):
         (1, "map CB stations", "open", "2026-08-16", None, ""),
         (2, "fix CB1 tag", "done", "2026-08-16", "2026-08-16", ""),
     ])
+    # same ALTER as scripts/sync_wildlife_log.py; rows 2 (Al) and 3 are bucks, 6 is a sow
+    conn.execute("ALTER TABLE sightings ADD COLUMN sex TEXT CHECK (sex IN ('M','F'))")
+    conn.executemany("UPDATE sightings SET sex=? WHERE sighting_id=?", [("M", 2), ("M", 3), ("F", 6)])
     conn.commit()
     conn.close()
     return {"root": tmp_path, "have_video": have_video, "img1": img1, "img2": img2}
@@ -455,3 +458,41 @@ def test_get_image_urls_payload_cap(root, monkeypatch):
     monkeypatch.setattr(queries, "URLS_PAYLOAD_CAP_BYTES", 2500)
     d = _json("get_image_urls")
     assert d["truncated"] is True and d["returned"] < d["total_matching"] and "payload cap" in d["truncated_reason"]
+
+
+# ── sex ───────────────────────────────────────────────────────────────────
+
+def test_sex_filter_breakdown_and_row_field(root):
+    bucks = queries.query_sightings({"species": "deer", "sex": "buck"}, "rows", limit=10)
+    assert [r["sighting_id"] for r in bucks["rows"]] == [3, 2]
+    assert bucks["filters_applied"]["sex"] == ["M"] and bucks["rows"][0]["sex"] == "M"
+    assert queries.query_sightings({"sex": ["female"]})["sighting_count"] == 1
+    assert queries.query_sightings({"sex": "none"})["sighting_count"] == 6
+    assert queries.query_sightings({"sex": "M, none"})["sighting_count"] == 8
+    d = queries.query_sightings({})
+    by = {i["sex"]: i["sighting_count"] for i in d["by_sex"]["items"]}
+    assert by == {"none": 6, "M": 2, "F": 1}
+    assert next(i for i in d["by_sex"]["items"] if i["sex"] == "M")["species"] == {"deer": 2}
+    with pytest.raises(queries.QueryError, match="sex must be"):
+        queries.query_sightings({"sex": "stag"})
+    sch = queries.get_schema()
+    assert {v["sex"]: v["sightings"] for v in sch["sex_in_use"]} == {"M": 2, "F": 1}
+
+
+def test_sex_tools_and_media_entries(root):
+    q = _json("query_sightings", species="deer", sex="M")
+    assert q["sighting_count"] == 2
+    urls = _json("get_image_urls", sex="F")
+    assert [e["sighting_id"] for e in urls["entries"]] == [6] and urls["entries"][0]["sex"] == "F"
+    head = json.loads(_tool("get_images", sighting_id=2)[0].text)
+    assert head["images"][0]["sex"] == "M"
+
+
+def test_db_without_sex_column_still_answers(root):
+    conn = sqlite3.connect(queries.wildlife_db())
+    conn.execute("ALTER TABLE sightings DROP COLUMN sex")
+    conn.commit(); conn.close()
+    assert queries.query_sightings({"sex": "M"})["sighting_count"] == 0
+    assert queries.query_sightings({"sex": "none"})["sighting_count"] == 9
+    assert queries.query_sightings({}, "rows", limit=1)["rows"][0]["sex"] is None
+    assert queries.get_schema()["sex_in_use"] == []

@@ -53,7 +53,11 @@ INSTRUCTIONS = (
     "so dawn-edge rows classify correctly as the season shifts. Individual "
     "attributions carry individual_confidence (confirmed | assumed | "
     "by_elimination | unconfirmed | none) and source (camera | direct_visual | "
-    "camera+visual); weigh them, never flatten them. Call get_schema for valid "
+    "camera+visual); weigh them, never flatten them. sex is M | F | null, set by "
+    "hand in review (bucks = species deer + sex M). Deer default to F unless "
+    "tagged M, so a deer F means 'not marked as a buck', not a checked doe; "
+    "for other species null means not recorded, so say how many matching "
+    "rows have no sex. Call get_schema for valid "
     "filter values, get_claims before re-raising a settled question, and "
     "get_images with include_references_for_individual=true when comparing a "
     "capture against a known animal."
@@ -67,7 +71,7 @@ _FILTERS = (
     "(night|morning|midday|evening); hour_from/hour_to (inclusive local hours, wraps "
     "midnight); light (daylight|civil_twilight|dark, computed per date); legal_light "
     "true/false; auto true/false (true = nightly review-sync rows, species only); "
-    "has_media true/false."
+    "has_media true/false; sex (M|F|none; male/female and buck/doe accepted)."
 )
 
 
@@ -84,7 +88,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
         "Query the sighting log. Unit: sightings (capture_count reported alongside). "
         "Default response_mode='summary' returns totals plus breakdowns by species, "
         "station, individual (with confidence/source split), source, confidence, "
-        "category and light - no rows. 'by_day' = per-day counts. 'histogram' = "
+        "category, sex and light - no rows. 'by_day' = per-day counts. 'histogram' = "
         "counts per histogram_bin (hour | time_of_day | light) with legal_light per "
         "bin and sunrise/sunset for the first and last day. 'rows' returns "
         "individual sightings and REQUIRES limit (max 200); use offset to page; "
@@ -101,6 +105,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
         hour_from: int | None = None, hour_to: int | None = None,
         light: list[str] | str | None = None, legal_light: bool | None = None,
         auto: bool | None = None, has_media: bool | None = None,
+        sex: list[str] | str | None = None,
         limit: int | None = None, offset: int = 0, order: str = "desc",
     ) -> dict:
         try:
@@ -109,7 +114,8 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
                  "station": station, "individual": individual, "category": category,
                  "source": source, "confidence": confidence, "time_of_day": time_of_day,
                  "hour_from": hour_from, "hour_to": hour_to, "light": light,
-                 "legal_light": legal_light, "auto": auto, "has_media": has_media},
+                 "legal_light": legal_light, "auto": auto, "has_media": has_media,
+                 "sex": sex},
                 response_mode=response_mode, histogram_bin=histogram_bin,
                 limit=limit, offset=offset, order=order)
         except _q.QueryError as exc:
@@ -129,7 +135,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
         "reference frames are appended so candidate and references arrive "
         "together. reference_frames_only=true with individual='Al' returns just "
         "the ID set. Returns a JSON manifest first (per image: sighting_id, "
-        "media_index, station, timestamp, species, individual, confidence, "
+        "media_index, station, timestamp, species, individual, confidence, sex, "
         "source, light, is_reference_frame, notes) then the images in that "
         "order; missing files are reported in the manifest, never silently "
         "dropped. Example: get_images(sighting_id=612, "
@@ -200,6 +206,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
                 "date": s["date"], "time": s["time"], "light": s["light"],
                 "legal_light": s["legal_light"], "species": s["species"],
                 "individual": s["individual"], "confidence": s["individual_confidence"],
+                "sex": s["sex"],
                 "source": s["source"], "count": s["count"], "auto": s["auto"],
                 "notes": s["notes"][:_q.NOTES_CAP], "media_total": len(s["media"]),
             })
@@ -254,7 +261,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
         "query_sightings filter set. Per entry: sighting_id, media_index, "
         "media_total, kind (image | video - emit <img> or <video> accordingly), "
         "url (review app on nvlm:8870, LAN/ZeroTier only), station, timestamp, "
-        "date, time, species, individual, individual_confidence, source, light, "
+        "date, time, species, individual, individual_confidence, sex, source, light, "
         "legal_light, count, auto, harvest, is_reference_frame, notes, bytes; "
         "missing files carry an error instead of a url and are never dropped. "
         "Default limit 50, max 500, newest first; returned/total_matching/"
@@ -272,6 +279,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
         hour_from: int | None = None, hour_to: int | None = None,
         light: list[str] | str | None = None, legal_light: bool | None = None,
         auto: bool | None = None, has_media: bool | None = None,
+        sex: list[str] | str | None = None,
         limit: int | None = None, offset: int = 0, order: str = "desc",
     ) -> dict:
         try:
@@ -280,7 +288,8 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
                  "station": station, "individual": individual, "category": category,
                  "source": source, "confidence": confidence, "time_of_day": time_of_day,
                  "hour_from": hour_from, "hour_to": hour_to, "light": light,
-                 "legal_light": legal_light, "auto": auto, "has_media": has_media},
+                 "legal_light": legal_light, "auto": auto, "has_media": has_media,
+                 "sex": sex},
                 sighting_ids=sighting_ids, individual=individual,
                 reference_frames_only=reference_frames_only,
                 limit=limit, offset=offset, order=order)
@@ -339,7 +348,7 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
 
     @mcp.tool(annotations=_RO, description=(
         "Controlled vocabularies actually in use, with counts: species, "
-        "categories, confidence levels, sources, stations (registered flag), "
+        "categories, confidence levels, sources, sex, stations (registered flag), "
         "individuals, time_of_day buckets, light values, response modes, and "
         "units. Also vocabulary_issues known in the data (e.g. fox vs gray_fox "
         "split, category-style species values, other-animal rows duplicating a "

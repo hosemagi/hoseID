@@ -320,7 +320,7 @@ class ReviewIn(BaseModel):
     counts: dict[str, int] = {}   # tag -> count, only for counts > 1
     individual: str | None = None
     individual_confidence: str | None = None
-    sex: Literal["M", "F"] | None = None
+    sex: Literal["M", "F"] = "F"   # female unless marked male; no "not set"
     notes: str = ""
 
 

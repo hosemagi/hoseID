@@ -113,3 +113,21 @@ def test_webhook_failure_logged_not_raised_then_one_operator_alert(
     alerts.check_and_alert(CFG, state, ["sha256:aa11"])
     assert operator[-1][0] == "hoseid alerts recovered"
     assert state.get("alert_webhook_failures") == 0
+
+
+def test_matched_but_undelivered_counts_toward_down_alert(det_db, webhook, operator, tmp_path,
+                                                          monkeypatch):
+    """A rule fired but hosenotify/ntfy didn't deliver: same as the webhook failing."""
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"fired": True, "results": {"lion": {
+                "wildlife-notify.send": "error:notification_undelivered:ch:1/1:429"}}}
+
+    monkeypatch.setattr(alerts.requests, "post", lambda *a, **k: Resp())
+    state = State(tmp_path / "s.json")
+    for _ in range(alerts.WEBHOOK_FAIL_ALERT_AFTER):
+        assert alerts.check_and_alert(CFG, state, ["sha256:aa11"]) == 0
+    assert len(operator) == 1 and "DOWN" in operator[0][0]

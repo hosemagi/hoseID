@@ -58,12 +58,12 @@ def env(tmp_path, monkeypatch):
     return sync, wl_db, tags_db
 
 
-def _review(tags_db, sex):
+def _review(tags_db, sex, tag="deer"):
     con = sqlite3.connect(tags_db)
     con.execute(
         "INSERT INTO reviews (basename, image, tags, reviewed_at, sex)"
-        " VALUES (?, ?, '[\"deer\"]', '2026-09-02T00:00:00Z', ?)",
-        (f"{DIGEST}.jpg", f"cc/cc/{DIGEST}.jpg", sex))
+        " VALUES (?, ?, ?, '2026-09-02T00:00:00Z', ?)",
+        (f"{DIGEST}.jpg", f"cc/cc/{DIGEST}.jpg", f'["{tag}"]', sex))
     con.commit()
     con.close()
 
@@ -82,14 +82,28 @@ def test_new_sighting_takes_review_sex(env):
     assert _sex(wl_db) == ["M"]
 
 
-def test_rereview_fills_unset_sex_only(env):
+def test_untagged_deer_default_to_doe_and_a_buck_tag_still_lands(env):
+    """Deer default to F (2026-10-26). A later explicit M must still reach
+    the log, since that F is usually the default, not a checked doe."""
     sync, wl_db, tags_db = env
     _review(tags_db, None)
     sync.main()
+    assert _sex(wl_db) == ["F"]
+    _review(tags_db, "M")            # re-review marks the buck
+    sync.main()
+    assert _sex(wl_db) == ["M"]
+    _review(tags_db, "F")            # an F never overrides an M
+    sync.main()
+    assert _sex(wl_db) == ["M"]
+
+
+def test_non_deer_take_only_a_male_mark(env):
+    """Reviews default to F, so an F is only applied to deer; a non-deer
+    sighting stays unset until a review marks it M."""
+    sync, wl_db, tags_db = env
+    _review(tags_db, "F", tag="bear")
+    sync.main()
     assert _sex(wl_db) == [None]
-    _review(tags_db, "F")            # re-review adds sex
+    _review(tags_db, "M", tag="bear")
     sync.main()
-    assert _sex(wl_db) == ["F"]
-    _review(tags_db, "M")            # log already has a value: left alone
-    sync.main()
-    assert _sex(wl_db) == ["F"]
+    assert _sex(wl_db) == ["M"]

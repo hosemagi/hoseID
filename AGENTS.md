@@ -23,13 +23,28 @@
   apply here (that is a hoseserv convention).
 
 ## Running / restarting
-- Service: launchd, review app on port 8870. Templates/static are read
+- Service: launchd (`com.hoseid.review`, plist in config/), review app on port 8870. Templates/static are read
   from disk — a browser reload picks up HTML/JS edits, no restart.
 - app.py changes need the 8870 process restarted; it runs under launchd —
   tell the operator rather than restarting it yourself.
 - The Reveal archive is immutable; never write under the archive roots.
   Live data: ~/trailcam/landing (assets/sidecars), ~/trailcam/derived
   (detections.db), ~/trailcam/tags (tags.db).
+
+## Real-time alerts (fetchers/alerts.py)
+- hoseID decides only what was detected (detect/classify + exclusion zones).
+  Who gets paged is hoseflow rules on nvlm (`wildlife-*`, hoseserv
+  `data/hoseflow/rules.yaml`): every non-zone detection is POSTed to
+  hoseserv's `wildlife-webhook`. Don't add species/threshold/cooldown logic
+  back here, and don't filter by species before posting (invariant 4).
+- The event fields in `build_event()` are a contract with those rules'
+  `match` clauses and `{field}` message templates — renaming one silently
+  breaks alerts. Taxon labels are classifier labels (deer = `blacktail`).
+- No direct-ntfy fallback. 3 failed batches in a row (webhook down, or a rule
+  fired but its notification wasn't delivered) send one "alerts DOWN" via
+  `common.notify()`, which goes straight to ntfy.
+- After editing it, restart the fetch daemon:
+  `sudo launchctl kickstart -k system/com.hoseid.fetch`.
 
 ## Gotchas
 - pipeline cache in app.py is keyed by file mtime; reset it directly in

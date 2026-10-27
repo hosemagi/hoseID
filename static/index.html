@@ -88,9 +88,8 @@
         <option value="">confidence…</option><option>confirmed</option>
         <option>assumed</option><option>by_elimination</option>
         <option>unconfirmed</option></select>
-      <select id="sex" title="ctrl+M male · ctrl+F female · same key again clears" style="flex:0 0 auto;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
-        <option value="">sex: not set</option><option value="M">♂ male</option>
-        <option value="F">♀ female</option></select>
+      <select id="sex" title="ctrl+M male · ctrl+F female · defaults to female" style="flex:0 0 auto;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
+        <option value="F">♀ female</option><option value="M">♂ male</option></select>
     </div>
     <textarea id="notes" placeholder="notes… (n to focus, Esc to leave)"></textarea>
     <button id="save">save &amp; next&nbsp;&nbsp;⏎</button>
@@ -194,7 +193,7 @@ async function show() {
   $('notes').value = item.review ? item.review.notes : '';
   $('indiv').value = (item.review && item.review.individual) || '';
   $('indivConf').value = (item.review && item.review.individual_confidence) || '';
-  $('sex').value = (item.review && item.review.sex) || '';
+  $('sex').value = (item.review && item.review.sex) || 'F';   // default: female
   paintTags();
   if (item.species && item.species.length) {
     const best = {};
@@ -337,7 +336,7 @@ async function save(advance = true) {
   const body = { asset_id: item.asset_id, tags: [...sel.keys()], counts,
     individual: $('indiv').value || null,
     individual_confidence: $('indivConf').value || null,
-    sex: $('sex').value || null,
+    sex: $('sex').value || 'F',
     notes: $('notes').value };
   await api('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body) });
@@ -354,13 +353,14 @@ function flashSaved() {
 }
 
 document.addEventListener('keydown', ev => {
-  // ctrl+M / ctrl+F set sex (same key again clears); saved with the review.
-  // Matches the wildlife log page's hotkeys. Works from the notes box too.
+  // ctrl+M / ctrl+F set sex; saved with the review. There is no "not set":
+  // a review is female unless marked male (2026-10-26). Same hotkeys as the
+  // wildlife log page. Works from the notes box too.
   const sk = ev.key.toLowerCase();
   if (ev.ctrlKey && !ev.metaKey && !ev.altKey && (sk === 'm' || sk === 'f')) {
     ev.preventDefault();
     const v = sk.toUpperCase();
-    $('sex').value = $('sex').value === v ? '' : v;
+    $('sex').value = v;
     return;
   }
   if (ev.target === $('notes')) {

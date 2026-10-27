@@ -163,9 +163,20 @@ def _post_event(cfg: dict, event: dict) -> dict | None:
         return None
 
 
+def _results(response: dict) -> list[str]:
+    return [str(r) for rule in (response.get("results") or {}).values()
+            for r in rule.values()]
+
+
 def _sent(response: dict) -> int:
-    return sum(1 for rule in (response.get("results") or {}).values()
-               for r in rule.values() if str(r).startswith("notification:sent"))
+    return sum(1 for r in _results(response) if r.startswith("notification:sent"))
+
+
+def _undelivered(response: dict) -> bool:
+    """A rule fired but none of its notifications got out (hosenotify down,
+    ntfy refusing): as bad as the webhook failing, for the DOWN alert."""
+    results = [r for r in _results(response) if "notification" in r]
+    return bool(results) and not any(r.startswith("notification:sent") for r in results)
 
 
 def _track_failures(cfg_all: dict, state: State, failed: list[dict]) -> None:
@@ -221,6 +232,10 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
                 continue
             n = _sent(response)
             sent += n
+            if _undelivered(response):
+                log(f"alerts: ERROR {event['label']} @ {event['station']} matched but "
+                    f"was not delivered: {json.dumps(response['results'])}")
+                failed.append(event)
             if response.get("results"):
                 log(f"alerts: {event['label']} @ {event['station']} -> "
                     f"{json.dumps(response['results'])}")

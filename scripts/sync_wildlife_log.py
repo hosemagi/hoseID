@@ -26,6 +26,10 @@ DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
 LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
 
+# sex for a new sighting whose review set none. Deer default to doe: bucks
+# are the minority and get tagged (ctrl+M); everything else stays unset.
+DEFAULT_SEX = {"deer": "F"}
+
 def local_date(capture_time_iso: str) -> str:
     t = datetime.fromisoformat(capture_time_iso)
     if t.tzinfo is None:
@@ -178,19 +182,25 @@ def main() -> int:
         cols = r.keys()
         indiv = r["individual"] if "individual" in cols else None
         indiv_conf = r["individual_confidence"] if "individual_confidence" in cols else None
-        sex = r["sex"] if "sex" in cols else None
+        review_sex = r["sex"] if "sex" in cols else None
         for sp in sorted(species_tags):
+            # reviews default to F since 2026-10-26 (no "not set" in the UI),
+            # so a review's F is only trusted for deer, the species it is the
+            # default for; an M is always a deliberate mark
+            sex = review_sex if review_sex == "M" or sp in DEFAULT_SEX else None
             dup = wl.execute(
                 "SELECT 1 FROM sightings WHERE capture_asset_id=? AND species=?",
                 (asset_id, sp)).fetchone() if asset_id else None
             if dup:
-                # a re-review that adds sex fills it in, but never overrides
-                # a value already set (possibly by hand) in the log
+                # a re-review that adds sex fills it in. It never overrides
+                # an M, but an explicit M does override an F: deer default
+                # to F (DEFAULT_SEX, 2026-10-26), so a deer F is usually
+                # "not marked buck" rather than a checked doe
                 if sex:
                     sex_filled += wl.execute(
                         "UPDATE sightings SET sex=? WHERE capture_asset_id=?"
-                        " AND species=? AND sex IS NULL",
-                        (sex, asset_id, sp)).rowcount
+                        " AND species=? AND (sex IS NULL OR (sex='F' AND ?='M'))",
+                        (sex, asset_id, sp, sex)).rowcount
                 continue
             if not media and asset_id.startswith("sha256:"):
                 digest = asset_id.split(":", 1)[1]
@@ -206,7 +216,8 @@ def main() -> int:
                 " individual_confidence, sex, notes, media_refs)"
                 " VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)",
                 (date, time, station, sp, counts.get(sp, 1), "camera",
-                 CATEGORY.get(sp, "other"), asset_id, indiv, indiv_conf, sex,
+                 CATEGORY.get(sp, "other"), asset_id, indiv, indiv_conf,
+                 sex or DEFAULT_SEX.get(sp),
                  r["notes"] or "", json.dumps(media)))
             added += 1
 

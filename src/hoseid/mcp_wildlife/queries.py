@@ -32,6 +32,11 @@ TIME_OF_DAY: dict[str, tuple[int, int]] = {
 }
 LIGHT_VALUES = ("daylight", "civil_twilight", "dark")
 CONFIDENCE_VALUES = ("confirmed", "assumed", "by_elimination", "unconfirmed")
+# sightings.sex is M | F | NULL (set in review, ctrl+M / ctrl+F). Words an LLM
+# caller is likely to send map onto it; 'none' = not set.
+SEX_ALIASES = {"m": "M", "male": "M", "buck": "M", "bucks": "M", "boar": "M",
+               "f": "F", "female": "F", "doe": "F", "does": "F", "sow": "F",
+               "none": None, "unknown": None, "unset": None}
 RESPONSE_MODES = ("summary", "by_day", "histogram", "rows")
 HISTOGRAM_BINS = ("hour", "time_of_day", "light")
 ROWS_MAX_LIMIT = 200
@@ -181,6 +186,23 @@ def build_where(conn: sqlite3.Connection, f: dict[str, Any]) -> tuple[str, list,
         params.extend(s.lower() for s in stations)
         applied["station"] = stations
 
+    sexes = _list(f.get("sex"))
+    if sexes:
+        bad = [v for v in sexes if v not in SEX_ALIASES]
+        if bad:
+            raise QueryError(f"sex must be M, F or none (male/female, buck/doe accepted), got {bad}")
+        want = {SEX_ALIASES[v] for v in sexes}
+        has_col = "sex" in {r[1] for r in conn.execute("PRAGMA table_info(sightings)")}
+        parts = []
+        real = sorted(v for v in want if v)
+        if real and has_col:
+            parts.append(f"sex IN ({','.join('?' * len(real))})")
+            params.extend(real)
+        if None in want:
+            parts.append("sex IS NULL" if has_col else "1")
+        clauses.append("(" + (" OR ".join(parts) or "0") + ")")
+        applied["sex"] = sorted(v or "none" for v in want)
+
     individuals = _list(f.get("individual"))
     if individuals:
         clauses.append(f"lower(individual) IN ({','.join('?' * len(individuals))})")
@@ -294,6 +316,7 @@ def enrich(row: sqlite3.Row, lat: float, lon: float) -> dict[str, Any]:
         "category": row["category"],
         "individual": row["individual"],
         "individual_confidence": row["individual_confidence"],
+        "sex": row["sex"] if "sex" in row.keys() else None,
         "count": row["count"],
         "count_is_visits": bool(row["count_is_visits"]),
         "source": row["source"],
@@ -441,6 +464,9 @@ def query_sightings(filters: dict[str, Any], response_mode: str = "summary",
         out["by_confidence"] = _breakdown(
             rows, lambda r: r["individual_confidence"] or "none", "individual_confidence")
         out["by_category"] = _breakdown(rows, lambda r: r["category"], "category")
+        out["by_sex"] = _breakdown(rows, lambda r: r["sex"] or "none", "sex",
+                                   extra=lambda rs: {"species": dict(Counter(r["species"] for r in rs)
+                                                                     .most_common(10))})
         out["by_light"] = _breakdown(rows, lambda r: r["light"] or "untimed", "light",
                                      extra=lambda rs: {"legal_light_sightings":
                                                        sum(1 for r in rs if r["legal_light"])})
@@ -734,6 +760,8 @@ def get_schema(db: Path | None = None) -> dict[str, Any]:
         categories = vals("category")
         confidence = vals("individual_confidence")
         sources = vals("source")
+        has_sex = "sex" in {r[1] for r in conn.execute("PRAGMA table_info(sightings)")}
+        sexes = vals("sex") if has_sex else []
         stations = vals("station")
         individuals = vals("individual")
         registered = {r[0] for r in conn.execute("SELECT name FROM stations")}
@@ -772,6 +800,11 @@ def get_schema(db: Path | None = None) -> dict[str, Any]:
         "species": species, "categories": categories,
         "confidence_levels": list(CONFIDENCE_VALUES) + ["none (unattributed)"],
         "confidence_in_use": confidence, "sources": sources,
+        "sex_values": ["M", "F", "none (not set)"], "sex_in_use": sexes,
+        "sex_note": "set by hand in review. Deer default to F unless tagged M "
+                    "(since 2026-10-26), so deer F = 'not marked buck', not a "
+                    "checked doe; other species are mostly none, so a sex "
+                    "filter undercounts them - report the none share",
         "stations": [{**s, "registered": s["station"] in registered} for s in stations],
         "individuals": individuals,
         "time_of_day": {k: f"{lo:02d}:00-{hi:02d}:59" for k, (lo, hi) in TIME_OF_DAY.items()},
@@ -799,8 +832,8 @@ def _sighting_media_entries(s: dict, is_ref: bool = False, ref_source: str | Non
             "station": s["station"], "timestamp": f"{s['date']} {s['time'] or '--:--'}",
             "date": s["date"], "time": s["time"], "time_of_day": s["time_of_day"],
             "species": s["species"], "category": s["category"], "individual": s["individual"],
-            "individual_confidence": s["individual_confidence"], "source": s["source"],
-            "light": s["light"], "legal_light": s["legal_light"], "count": s["count"],
+            "individual_confidence": s["individual_confidence"], "sex": s["sex"],
+            "source": s["source"], "light": s["light"], "legal_light": s["legal_light"], "count": s["count"],
             "auto": s["auto"], "harvest": s["harvest"], "is_reference_frame": is_ref,
             "reference_source": ref_source, "notes": s["notes"][:NOTES_CAP],
         })

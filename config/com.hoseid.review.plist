@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  hoseID review app (http :8870). Runs from the megadetector venv - the repo
+  .venv has no fastapi.
+
+  To install:
+    cp config/com.hoseid.review.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hoseid.review.plist
+  To restart after app.py change:
+    launchctl kickstart -k gui/$(id -u)/com.hoseid.review
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hoseid.review</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/hosebot/venvs/megadetector/bin/uvicorn</string>
+        <string>app:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8870</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/hosebot/projects/hoseID</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/hosebot/venvs/megadetector/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/hosebot/logs/hoseid-review.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/hosebot/logs/hoseid-review.log</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
