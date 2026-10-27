@@ -9,6 +9,7 @@ The script's DB paths are module constants; monkeypatch them (AGENTS.md).
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -107,3 +108,50 @@ def test_non_deer_take_only_a_male_mark(env):
     _review(tags_db, "M", tag="bear")
     sync.main()
     assert _sex(wl_db) == ["M"]
+
+
+# --- individual attribution is per species ----------------------------------
+# One review covers the whole capture. Its individual field can name several
+# individuals and people (hoseID's people table); each sighting gets only the
+# names registered as wildlife individuals of its own species.
+
+def _review_named(tags_db, tags, individual):
+    con = sqlite3.connect(tags_db)
+    con.execute(
+        "INSERT INTO reviews (basename, image, tags, reviewed_at, individual,"
+        " individual_confidence) VALUES (?, ?, ?, '2026-09-02T00:00:00Z', ?, 'confirmed')",
+        (f"{DIGEST}.jpg", f"cc/cc/{DIGEST}.jpg", json.dumps(tags), individual))
+    con.commit()
+    con.close()
+
+
+def _individuals(wl_db):
+    con = sqlite3.connect(wl_db)
+    rows = con.execute("SELECT species, individual, individual_confidence FROM sightings"
+                       " ORDER BY species").fetchall()
+    con.close()
+    return rows
+
+
+def _register(wl_db, name, species):
+    con = sqlite3.connect(wl_db)
+    con.execute("INSERT INTO individuals (name, species) VALUES (?, ?)", (name, species))
+    con.commit()
+    con.close()
+
+
+def test_a_person_named_in_the_capture_never_lands_on_an_animal(env):
+    sync, wl_db, tags_db = env
+    _review_named(tags_db, ["domestic-dog", "person"], "Sam")
+    sync.main()
+    assert _individuals(wl_db) == [("domestic-dog", None, None)]
+
+
+def test_each_species_keeps_only_its_own_individuals(env):
+    sync, wl_db, tags_db = env
+    _register(wl_db, "Ben", "deer")
+    _register(wl_db, "Boar", "bear")
+    _review_named(tags_db, ["bear", "deer", "person"], "Ben+Boar+Sam")
+    sync.main()
+    assert _individuals(wl_db) == [("bear", "Boar", "confirmed"),
+                                   ("deer", "Ben", "confirmed")]

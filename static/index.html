@@ -47,6 +47,10 @@
   #zonepanel h2 { font-size: 12.5px; color: var(--fg); margin-bottom: 4px; }
   #zonepanel .flag { color: var(--warn); }
   #zonepanel .areas b { color: var(--excl); }
+  #indivChips { display: flex; flex-wrap: wrap; gap: 4px; }
+  #indivChips:empty { display: none; }
+  .chip { background: var(--on); border-radius: 12px; padding: 2px 9px; font-size: 12.5px; cursor: pointer; }
+  .chip kbd { font-size: 11px; color: var(--dim); margin-right: 3px; }
   #moved { background: var(--bg); color: var(--dim); border: 1px solid var(--edge); font-weight: 400; font-size: 12px; padding: 4px 8px; margin-top: 6px; }
 </style>
 </head>
@@ -57,6 +61,7 @@
     <option value="unreviewed" selected>unreviewed</option>
     <option value="reviewed">reviewed</option>
     <option value="all">all</option>
+    <option value="people">people to name</option>
   </select>
   <select id="fDevice"><option value="">all devices</option></select>
   <select id="fSort">
@@ -83,7 +88,7 @@
     <div id="tags"></div>
     <div style="display:flex;gap:6px">
       <select id="indiv" style="flex:1;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
-        <option value="">individual: none</option></select>
+        <option value="">+ individual…</option></select>
       <select id="indivConf" style="flex:1;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
         <option value="">confidence…</option><option>confirmed</option>
         <option>assumed</option><option>by_elimination</option>
@@ -91,6 +96,7 @@
       <select id="sex" title="ctrl+M male · ctrl+F female · defaults to female" style="flex:0 0 auto;padding:5px;border-radius:6px;border:1px solid var(--edge);background:var(--bg);color:inherit">
         <option value="F">♀ female</option><option value="M">♂ male</option></select>
     </div>
+    <div id="indivChips"></div>
     <textarea id="notes" placeholder="notes… (n to focus, Esc to leave)"></textarea>
     <button id="save">save &amp; next&nbsp;&nbsp;⏎</button>
     <div id="zonepanel"></div>
@@ -98,7 +104,7 @@
       letter = tag, again = +1, <kbd>⇧</kbd>+letter = −1 · <kbd>space</kbd> play/pause video ·
       <kbd>⌫</kbd> empty+next · <kbd>⏎</kbd> save+next · <kbd>←</kbd><kbd>→</kbd>/<kbd>z</kbd> nav ·
       <kbd>x</kbd> boxes · <kbd>n</kbd> notes · <kbd>h</kbd> status ·
-      <kbd>⌃M</kbd>/<kbd>⌃F</kbd> sex ·
+      <kbd>⌃M</kbd>/<kbd>⌃F</kbd> sex · <kbd>1</kbd>–<kbd>9</kbd> name a person ·
       click box = exclude it · <kbd>a</kbd> = exclude ALL boxes · click zone = remove
     </div>
     <div id="saved">saved ✓</div>
@@ -109,6 +115,7 @@ let PRESETS = [], NO_COUNT = [], CFG = {}, queue = [], pos = 0, showBoxes = true
 let showMeta = localStorage.getItem('hideMeta') !== '1';   // h toggles the status bar over the image
 let videoFrame = null;               // sampled-frame offset (s) for the current video item; boxes describe that one frame
 let sel = new Map();                 // tag -> count
+let indiv = [];                      // named individuals for this capture (animals and/or people)
 let ZONES = {};                      // device_id -> active zones
 let SUPPRESSED = {};                 // device_id -> total suppressed count
 const $ = id => document.getElementById(id);
@@ -129,8 +136,59 @@ async function loadConfig() {
   });
   const dv = $('fDevice');
   CFG.devices.forEach(d => dv.add(new Option('…' + d.slice(-6), d)));
-  (CFG.individuals || []).forEach(i =>
-    $('indiv').add(new Option(`${i.name} (${i.species})`, i.name)));
+  fillIndivPicker();
+}
+
+// One review covers the whole capture, so it can name several individuals;
+// they are stored '+'-joined ("Al+Ben"). People come from tags.db (hotkeys
+// 1-9 by creation order), wildlife individuals from wildlife.db.
+function fillIndivPicker() {
+  const pick = $('indiv');
+  pick.length = 1;
+  const people = document.createElement('optgroup'); people.label = 'people';
+  (CFG.people || []).forEach((p, i) =>
+    people.appendChild(new Option((i < 9 ? `${i + 1} · ` : '') + p.name, p.name)));
+  people.appendChild(new Option('＋ new person…', '__new__'));
+  pick.appendChild(people);
+  const wild = document.createElement('optgroup'); wild.label = 'wildlife';
+  (CFG.individuals || []).forEach(i => wild.appendChild(new Option(`${i.name} (${i.species})`, i.name)));
+  pick.appendChild(wild);
+}
+
+const isPerson = name => (CFG.people || []).some(p => p.name === name);
+
+function toggleIndiv(name) {
+  if (!name) return;
+  if (indiv.includes(name)) { indiv = indiv.filter(n => n !== name); }
+  else {
+    indiv.push(name);
+    if (isPerson(name)) {
+      // naming a person implies the person tag; the people list is people P
+      // knows, so confidence defaults to confirmed (still editable before saving)
+      if (!sel.has('person')) { sel.delete('empty'); sel.set('person', 1); paintTags(); }
+      if (!$('indivConf').value) $('indivConf').value = 'confirmed';
+    }
+  }
+  paintIndiv();
+}
+
+function paintIndiv() {
+  const hot = name => { const i = (CFG.people || []).findIndex(p => p.name === name); return i >= 0 && i < 9 ? `<kbd>${i + 1}</kbd>` : ''; };
+  $('indivChips').innerHTML = indiv.map(n =>
+    `<span class="chip" title="click to remove" data-name="${n}">${hot(n)}${n} ✕</span>`).join('');
+  document.querySelectorAll('.chip').forEach(el => el.onclick = () => toggleIndiv(el.dataset.name));
+}
+
+async function newPerson() {
+  const name = (prompt('New person\'s name:') || '').trim();
+  if (!name) return;
+  try {
+    await api('/api/people', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }) });
+  } catch (e) { alert(e.message); return; }
+  CFG.people = (await api('/api/config')).people;
+  fillIndivPicker();
+  toggleIndiv(name);
 }
 
 async function loadZones(device) {
@@ -191,7 +249,8 @@ async function show() {
   if (item.review) item.review.tags.forEach(t =>
     sel.set(t, (item.review.counts || {})[t] || 1));
   $('notes').value = item.review ? item.review.notes : '';
-  $('indiv').value = (item.review && item.review.individual) || '';
+  indiv = ((item.review && item.review.individual) || '').split('+').filter(Boolean);
+  paintIndiv();
   $('indivConf').value = (item.review && item.review.individual_confidence) || '';
   $('sex').value = (item.review && item.review.sex) || 'F';   // default: female
   paintTags();
@@ -330,11 +389,11 @@ async function save(advance = true) {
   if (!item || sel.size === 0) return;
   const counts = {};
   for (const [t, n] of sel) if (n > 1) counts[t] = n;
-  if ($('indiv').value && !$('indivConf').value) {
+  if (indiv.length && !$('indivConf').value) {
     alert('Naming an individual requires a confidence level.'); return;
   }
   const body = { asset_id: item.asset_id, tags: [...sel.keys()], counts,
-    individual: $('indiv').value || null,
+    individual: indiv.join('+') || null,
     individual_confidence: $('indivConf').value || null,
     sex: $('sex').value || 'F',
     notes: $('notes').value };
@@ -371,12 +430,16 @@ document.addEventListener('keydown', ev => {
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const k = ev.key.toLowerCase();
   if (KEYMAP[k]) { bump(KEYMAP[k], ev.shiftKey ? -1 : 1); }
+  else if (/^[1-9]$/.test(ev.key)) {
+    const p = (CFG.people || [])[+ev.key - 1];
+    if (p) toggleIndiv(p.name);
+  }
   else if (ev.key === ' ') {
     ev.preventDefault();
     const vid = $('clip');
     if (vid.style.display !== 'none') { vid.paused ? vid.play() : vid.pause(); }
   }
-  else if (ev.key === 'Backspace') { sel = new Map([['empty', 1]]); paintTags(); save(); }
+  else if (ev.key === 'Backspace') { sel = new Map([['empty', 1]]); indiv = []; paintTags(); paintIndiv(); save(); }
   else if (ev.key === 'Enter') { save(); }
   else if (ev.key === 'ArrowRight') { if (pos < queue.length - 1) { pos++; show(); } }
   else if (ev.key === 'ArrowLeft' || k === 'z') { if (pos > 0) { pos--; show(); } }
@@ -394,6 +457,11 @@ document.addEventListener('keydown', ev => {
 });
 
 $('save').onclick = () => save();
+$('indiv').onchange = () => {
+  const v = $('indiv').value;
+  $('indiv').value = ''; $('indiv').blur();   // back to the keymap
+  if (v === '__new__') newPerson(); else toggleIndiv(v);
+};
 $('sync').onclick = async () => {
   const b = $('sync');
   b.blur();                          // keep space/enter on the review keymap

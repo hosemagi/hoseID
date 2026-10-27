@@ -89,6 +89,19 @@ def normalize_station(name: str, date: str | None = None) -> str:
     return STATION_RENAMES.get(name, name)
 
 
+def individuals_for(individual: str | None, species: str,
+                    species_of: dict[str, str]) -> str | None:
+    """The part of a review's individual field that belongs to this species.
+
+    One review covers the whole capture, so its individual field can name
+    several individuals ("Al+Ben") and people too (hoseID's people table): a
+    capture of a dog and P, named "P", must not log the dog as P. Only names
+    that are registered wildlife individuals of this species pass; people
+    never appear in wildlife.db, so they never reach the log."""
+    names = [n for n in (individual or "").split("+") if species_of.get(n) == species]
+    return "+".join(names) or None
+
+
 def claimed_refs(wl: sqlite3.Connection) -> set[str]:
     """Every media ref already represented by an existing sighting — either
     as capture_asset_id or inside media_refs (curated entries linked by the
@@ -127,6 +140,7 @@ def main() -> int:
     if det:
         det.row_factory = sqlite3.Row
 
+    species_of = dict(wl.execute("SELECT name, species FROM individuals").fetchall())
     row = wl.execute("SELECT value FROM meta WHERE key='review_watermark'").fetchone()
     watermark = int(row["value"]) if row else 0
 
@@ -210,13 +224,15 @@ def main() -> int:
                     media.append({"ref": asset_id, "path": str(hits[0]),
                                   "kind": "video" if hits[0].suffix == ".mp4"
                                   else "image"})
+            sp_indiv = individuals_for(indiv, sp, species_of)
             wl.execute(
                 "INSERT INTO sightings (date, time, station, species, count,"
                 " source, category, capture_asset_id, auto, individual,"
                 " individual_confidence, sex, notes, media_refs)"
                 " VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)",
                 (date, time, station, sp, counts.get(sp, 1), "camera",
-                 CATEGORY.get(sp, "other"), asset_id, indiv, indiv_conf,
+                 CATEGORY.get(sp, "other"), asset_id, sp_indiv,
+                 indiv_conf if sp_indiv else None,
                  sex or DEFAULT_SEX.get(sp),
                  r["notes"] or "", json.dumps(media)))
             added += 1

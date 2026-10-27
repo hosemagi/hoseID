@@ -127,3 +127,52 @@ def test_review_rejects_unknown_sex():
         app.ReviewIn(asset_id="x", tags=["deer"], sex="male")
     with pytest.raises(ValidationError):       # no "not set" any more
         app.ReviewIn(asset_id="x", tags=["deer"], sex=None)
+
+
+# --- people named in reviews.individual -------------------------------------
+
+@pytest.fixture
+def people_env(env, tmp_path, monkeypatch):
+    wl = tmp_path / "wildlife.db"
+    con = sqlite3.connect(wl)
+    con.executescript((Path(__file__).parent.parent / "migrations/wildlife/001_wildlife.sql")
+                      .read_text())
+    con.execute("INSERT INTO individuals (name, species) VALUES ('Ben', 'deer')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(app, "WILDLIFE_DB", wl)
+    _seed(env, IMG, ".jpg", media_type="image", offset=None, taxon=None,
+          conf=0.9, bbox=[0.3, 0.1, 0.2, 0.6], cap_time="2026-08-29T05:00:00")
+    con = sqlite3.connect(env["det_db"])
+    con.execute("UPDATE detections SET detector_class='person', taxon=NULL")
+    con.commit()
+    con.close()
+    app._pipeline_cache.update(mtime=None, items={})
+    return env
+
+
+def test_people_queue_holds_person_captures_until_someone_is_named(people_env):
+    assert "capture:" + IMG in _items(status="people")
+    app.add_person(app.PersonIn(name="Sam"))
+    app.review(app.ReviewIn(asset_id="capture:" + IMG, tags=["person"]))
+    assert "capture:" + IMG in _items(status="people")     # reviewed, but no name yet
+    app.review(app.ReviewIn(asset_id="capture:" + IMG, tags=["person", "deer"],
+                            individual="Ben+Sam", individual_confidence="confirmed"))
+    assert "capture:" + IMG not in _items(status="people")
+    assert _items(status="reviewed")["capture:" + IMG]["review"]["individual"] == "Ben+Sam"
+
+
+def test_review_rejects_names_that_are_not_registered(people_env):
+    with pytest.raises(app.HTTPException) as e:
+        app.review(app.ReviewIn(asset_id="capture:" + IMG, tags=["person"],
+                                individual="Sma", individual_confidence="confirmed"))
+    assert e.value.status_code == 400
+
+
+def test_person_names_are_unique_and_never_shadow_wildlife(people_env):
+    assert app.add_person(app.PersonIn(name=" Sam "))["name"] == "Sam"
+    for bad, code in (("Sam", 409), ("Ben", 409), ("A+B", 400), ("  ", 400)):
+        with pytest.raises(app.HTTPException) as e:
+            app.add_person(app.PersonIn(name=bad))
+        assert e.value.status_code == code
+    assert [p["name"] for p in app.config()["people"]] == ["Sam"]

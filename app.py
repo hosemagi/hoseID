@@ -48,9 +48,11 @@ SIDECARS = Path("/Users/hosebot/trailcam/landing/sidecars")
 DETECTIONS_DB = Path("/Users/hosebot/trailcam/derived/detections.db")
 DB_PATH = Path("/Users/hosebot/trailcam/tags/tags.db")
 MOVE_FLAGS = Path("/Users/hosebot/trailcam/derived/camera-move-flags.json")
+WILDLIFE_DB = Path("/Users/hosebot/trailcam/tags/wildlife.db")
 STATIC = Path(__file__).parent / "static"
 
 MAX_ZONE_AREA_FRAC = 0.25   # a single zone larger than this needs confirm
+INDIVIDUAL_SEP = "+"        # several individuals in one review: "Al+Ben"
 
 # (tag, hotkey); hotkeys must not collide with UI keys a/x/n/z/space/enter/arrows.
 # "empty" and "unsure" are exclusive flags; every other tag carries a count.
@@ -149,6 +151,16 @@ def init_db():
                 device_id TEXT NOT NULL,
                 action TEXT NOT NULL,         -- add|merge|delete|epoch_bump
                 detail TEXT NOT NULL          -- JSON
+            )
+        """)
+        # People who can be named in reviews.individual. Kept here, not in
+        # wildlife.db's individuals table: people are not wildlife, and the
+        # wildlife log, its MCP and its encounter chains must never see them.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
             )
         """)
 
@@ -348,14 +360,7 @@ def config():
     )
     with db() as conn:
         epochs = {d: current_epoch(conn, d) for d in devices}
-    individuals = []
-    wldb = Path("/Users/hosebot/trailcam/tags/wildlife.db")
-    if wldb.exists():
-        wconn = sqlite3.connect(f"file:{wldb}?mode=ro", uri=True)
-        individuals = [{"name": n, "species": sp} for n, sp in
-                       wconn.execute("SELECT name, species FROM individuals"
-                                     " ORDER BY name")]
-        wconn.close()
+        people = list_people(conn)
     return {
         "preset_tags": [{"tag": t, "key": k} for t, k in PRESET_TAGS],
         "no_count_tags": ["empty", "unsure"],
@@ -363,8 +368,50 @@ def config():
         "epochs": epochs,
         "max_zone_area_frac": MAX_ZONE_AREA_FRAC,
         "move_flags": move_flags,
-        "individuals": individuals,
+        "individuals": wildlife_individuals(),
+        "people": people,          # ordered: the first nine are hotkeys 1-9
     }
+
+
+def wildlife_individuals() -> list[dict]:
+    if not WILDLIFE_DB.exists():
+        return []
+    wconn = sqlite3.connect(f"file:{WILDLIFE_DB}?mode=ro", uri=True)
+    out = [{"name": n, "species": sp} for n, sp in
+           wconn.execute("SELECT name, species FROM individuals ORDER BY name")]
+    wconn.close()
+    return out
+
+
+def list_people(conn) -> list[dict]:
+    return [{"id": r["id"], "name": r["name"]}
+            for r in conn.execute("SELECT id, name FROM people ORDER BY id")]
+
+
+def individual_names(value: str | None) -> list[str]:
+    """reviews.individual holds one name or several joined with '+' ("Al+Ben"),
+    the same convention build_encounters.py uses for animals seen together."""
+    return [n for n in (value or "").split(INDIVIDUAL_SEP) if n]
+
+
+class PersonIn(BaseModel):
+    name: str
+
+
+@app.post("/api/people")
+def add_person(p: PersonIn):
+    name = p.name.strip()
+    if not name or INDIVIDUAL_SEP in name:
+        raise HTTPException(400, f"name required, without '{INDIVIDUAL_SEP}'")
+    if name in {i["name"] for i in wildlife_individuals()}:
+        raise HTTPException(409, f"{name!r} is already a wildlife individual")
+    with db() as conn:
+        try:
+            cur = conn.execute("INSERT INTO people (name, created_at) VALUES (?,?)",
+                               (name, now_iso()))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, f"{name!r} already exists")
+    return {"id": cur.lastrowid, "name": name}
 
 
 @app.get("/api/zones")
@@ -497,6 +544,7 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
     with db() as conn:
         reviewed = latest_reviews(conn)
         zones_all = active_zones(conn)
+        people = {p["name"] for p in list_people(conn)}
     by_dev = {}
     for z in zones_all:
         by_dev.setdefault(z["device_id"], []).append(z)
@@ -509,6 +557,14 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
             continue
         if status == "reviewed" and not r:
             continue
+        if status == "people":
+            # person captures not yet named: the detector saw a person or the
+            # review says person, and the verdict names no one from `people`
+            has_person = (any(d["category"] == "2" for d in im["detections"])
+                          or (r is not None and "person" in json.loads(r["tags"])))
+            named = r is not None and people & set(individual_names(r["individual"]))
+            if not has_person or named:
+                continue
         item = dict(im)
         dev_zones = by_dev.get(im["device_id"], [])
         dets = [dict(d, excluded=_excluded(d, dev_zones)) for d in im["detections"]]
@@ -569,6 +625,10 @@ def review(r: ReviewIn):
                                  "an individual (a wrong name is worse than "
                                  "no name)")
     with db() as conn:
+        known = ({i["name"] for i in wildlife_individuals()}
+                 | {p["name"] for p in list_people(conn)})
+        if unknown := [n for n in individual_names(r.individual) if n not in known]:
+            raise HTTPException(400, f"unknown individual(s): {unknown}")
         conn.execute(
             "INSERT INTO reviews (asset_id, basename, image, device_id, captured_at,"
             " tags, counts, individual, individual_confidence, sex, notes,"
