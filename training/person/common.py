@@ -39,5 +39,17 @@ def asset_file(asset_id: str) -> Path | None:
     return hits[0] if hits else None
 
 
+def tight_crop(row: dict):
+    """The detector's box without extract.py's padding. Padded crops are mostly
+    scene, and a model scoring them recognises the camera, not the person
+    (eval 2026-10-26: 0.34 -> 0.43 balanced accuracy on held-out days)."""
+    from PIL import Image
+    im = Image.open(row["crop"]).convert("RGB")
+    W, H = im.size
+    px = min(max(16.0, PAD_FRAC * row["box_w"]), W * 0.3)
+    py = min(max(16.0, PAD_FRAC * row["box_h"]), H * 0.3)
+    return im.crop((int(px), int(py), int(W - px), int(H - py)))
+
+
 def load_rows() -> list[dict]:
     return [json.loads(line) for line in (OUT / "rows.jsonl").read_text().splitlines() if line.strip()]

@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .venv-fetch/
+.venv-person/
 logs/
 
 # self-signed TLS for the wildlife MCP (regenerated on first run)

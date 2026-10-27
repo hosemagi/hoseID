@@ -83,9 +83,16 @@ def evaluate(X, y, groups, classes):
 
 
 def main() -> int:
+    import argparse
     import numpy as np
+    ap = argparse.ArgumentParser()
+    ap.add_argument("features", nargs="?", default="features_dino.npy",
+                    help="an .npy under derived/training/person, row-aligned with rows.jsonl")
+    args = ap.parse_args()
     rows, idx = labeled()
-    X = np.load(OUT / "features_dino.npy")[idx]
+    X = np.load(OUT / args.features)[idx]
+    X = X / np.linalg.norm(X, axis=1, keepdims=True)
+    print(f"features: {args.features}")
     classes = sorted({r["person"] for r in rows})
     y = np.array([classes.index(r["person"]) for r in rows])
     counts = collections.Counter(r["person"] for r in rows)
