@@ -27,6 +27,8 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fetchers import alerts  # noqa: E402
@@ -51,6 +53,11 @@ EXIT_RESTART = 3
 # A session that dies well inside the expected window is a different problem
 # (Arlo rejecting the login, rate limiting, 2FA pushback) and still pages.
 SESSION_EXPIRY_EXPECTED_AFTER_S = 60 * 60
+# Reveal's cloud drops a connection or answers 502/503/504 a few times a day
+# and is fine on the next poll: 213 "reveal: ERROR (1 consecutive)" lines in
+# hoseid-fetch.log were exactly that. The first such failure in a row logs a
+# plain line; a second in a row is no longer a hiccup and logs ERROR.
+TRANSIENT_HTTP_STATUSES = frozenset({502, 503, 504})
 
 
 def classify_failure(exc: Exception, failures: int,
@@ -71,6 +78,20 @@ def classify_failure(exc: Exception, failures: int,
     return restart, restart and not routine, routine
 
 
+def is_transient_reveal(exc: Exception, name: str, failures: int) -> bool:
+    """True for the first Reveal failure in a row that looks like a cloud
+    hiccup (dropped connection, timeout, 502/503/504). Only the log wording
+    changes; the failure still counts toward the alert/restart thresholds."""
+    if name != "reveal" or failures != 1:
+        return False
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        return getattr(response, "status_code", None) in TRANSIENT_HTTP_STATUSES
+    return False
+
+
 def run_source(name: str, fn, *, cfg: dict, failures: dict[str, int],
                login_at: float, once: bool, stop) -> list[str]:
     """Run one source pass; on failure log, alert and maybe exit for a
@@ -85,12 +106,15 @@ def run_source(name: str, fn, *, cfg: dict, failures: dict[str, int],
         restart, alert, routine = classify_failure(e, failures[name],
                                                    session_age)
         if once:
-            # --once never restarts, so a dead session there is unexpected
-            # and logs as an ERROR like any other failure.
+            # --once never restarts or retries, so a dead session or a Reveal
+            # hiccup there is unexpected and logs as an ERROR like any other
+            # failure.
             restart = alert = routine = False
         if routine:
             log(f"{name}: session expired after {session_age / 60:.0f} min "
                 "(routine); restarting")
+        elif not once and is_transient_reveal(e, name, failures[name]):
+            log(f"{name}: transient {type(e).__name__}, retrying next sweep")
         else:
             log(f"{name}: ERROR ({failures[name]} consecutive): "
                 f"{type(e).__name__}: {e}")
