@@ -37,10 +37,11 @@ import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
+import requests  # noqa: F401  (tests patch alerts.requests.post)
 import urllib3
 
-from .common import State, log, notify
+from .common import (DEFAULT_WEBHOOK, State, hoseflow_results, log, notify,
+                     notifications_sent, post_to_hoseflow)
 
 REPO = Path(__file__).resolve().parents[1]
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
@@ -50,10 +51,10 @@ ASSETS = Path.home() / "trailcam/landing/assets"
 PIPELINE_LOCK = Path.home() / "trailcam/derived/.pipeline.lock"
 LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
-DEFAULT_WEBHOOK = "https://127.0.0.1:8000/api/v1/hoseflow/webhooks/wildlife-webhook"
 WEBHOOK_FAIL_ALERT_AFTER = 3
 
-# Loopback to hoseserv's self-signed cert; verify=False is scoped to that call.
+# Loopback to hoseserv's self-signed cert; verify=False is scoped to
+# common.post_to_hoseflow.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -163,29 +164,13 @@ def build_event(det, cap, device_id: str | None, image: Path | None) -> dict:
 def _post_event(cfg: dict, event: dict) -> dict | None:
     """POST one event; returns hoseflow's {fired, results} or None on failure."""
     url = cfg.get("hoseflow_url") or DEFAULT_WEBHOOK
-    try:
-        resp = requests.post(url, json=event, timeout=30, verify=False,
-                             headers={"X-Api-Key": cfg.get("hoseflow_api_key", "")})
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        log(f"alerts: ERROR hoseflow webhook failed: {type(e).__name__}: {e}")
-        return None
-
-
-def _results(response: dict) -> list[str]:
-    return [str(r) for rule in (response.get("results") or {}).values()
-            for r in rule.values()]
-
-
-def _sent(response: dict) -> int:
-    return sum(1 for r in _results(response) if r.startswith("notification:sent"))
+    return post_to_hoseflow(url, cfg.get("hoseflow_api_key", ""), event, "alerts")
 
 
 def _undelivered(response: dict) -> bool:
     """A rule fired but none of its notifications got out (hosenotify down,
     ntfy refusing): as bad as the webhook failing, for the DOWN alert."""
-    results = [r for r in _results(response) if "notification" in r]
+    results = [r for r in hoseflow_results(response) if "notification" in r]
     return bool(results) and not any(r.startswith("notification:sent") for r in results)
 
 
@@ -240,7 +225,7 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
             if response is None:
                 failed.append(event)
                 continue
-            n = _sent(response)
+            n = notifications_sent(response)
             sent += n
             if _undelivered(response):
                 log(f"alerts: ERROR {event['label']} @ {event['station']} matched but "

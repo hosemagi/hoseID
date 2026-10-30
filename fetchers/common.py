@@ -114,21 +114,49 @@ def notify(cfg: dict, message: str, title: str = "hoseid-fetch") -> None:
         log(f"notify: send failed: {type(e).__name__}: {e}")
 
 
-DEFAULT_HEALTH_WEBHOOK = ("https://127.0.0.1:8000/api/v1/hoseflow/webhooks/"
-                          "hoseid-fetch-health")
+DEFAULT_WEBHOOK = "https://127.0.0.1:8000/api/v1/hoseflow/webhooks/wildlife-webhook"
 HEALTH_DEVICE = "hoseid-fetch-health"
 
 
 def health_url(cfg: dict) -> str:
     """``[notify] hoseflow_health_url`` if set; else the ``[alerts]``
-    hoseflow_url host with device hoseid-fetch-health."""
+    hoseflow_url (or its local default) host with device hoseid-fetch-health."""
     url = cfg.get("notify", {}).get("hoseflow_health_url", "")
     if url:
         return url
-    base = cfg.get("alerts", {}).get("hoseflow_url", "")
-    if base:
-        return f"{base.rstrip('/').rsplit('/', 1)[0]}/{HEALTH_DEVICE}"
-    return DEFAULT_HEALTH_WEBHOOK
+    base = cfg.get("alerts", {}).get("hoseflow_url") or DEFAULT_WEBHOOK
+    return f"{base.rstrip('/').rsplit('/', 1)[0]}/{HEALTH_DEVICE}"
+
+
+DEFAULT_HEALTH_WEBHOOK = health_url({})
+
+
+def post_to_hoseflow(url: str, key: str, payload: dict,
+                     label: str) -> dict | None:
+    """POST one event to a hoseflow webhook; hoseflow's {fired, results}, or
+    None (logged under ``label``) on any failure. Never raises."""
+    try:
+        # Loopback to hoseserv's self-signed cert; verify=False is scoped here.
+        resp = requests.post(url, json=payload, timeout=30, verify=False,
+                             headers={"X-Api-Key": key})
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        log(f"{label}: ERROR hoseflow webhook failed: {type(e).__name__}: {e}")
+        return None
+
+
+def hoseflow_results(response: dict | None) -> list[str]:
+    """Every per-action result string in a hoseflow webhook response."""
+    return [str(r) for rule in ((response or {}).get("results") or {}).values()
+            for r in rule.values()]
+
+
+def notifications_sent(response: dict | None) -> int:
+    """How many notifications hoseflow reports actually sent. A 2xx with no
+    rule behind it, or a rule whose send failed, counts 0."""
+    return sum(1 for r in hoseflow_results(response)
+               if r.startswith("notification:sent"))
 
 
 def push_health(cfg: dict, source: str, verdict: str, failures: int,
@@ -143,18 +171,10 @@ def push_health(cfg: dict, source: str, verdict: str, failures: int,
         return False
     payload = {"source": source, "verdict": verdict, "failures": failures,
                "error": error[:200] if error else None}
-    try:
-        # Loopback to hoseserv's self-signed cert, as in alerts._post_event.
-        resp = requests.post(health_url(cfg), json=payload, timeout=30,
-                             verify=False, headers={"X-Api-Key": key})
-        resp.raise_for_status()
-        body = resp.json()
-    except Exception as e:
-        log(f"health: hoseflow webhook failed: {type(e).__name__}: {e}")
+    body = post_to_hoseflow(health_url(cfg), key, payload, "health")
+    if body is None:
         return False
-    results = [str(r) for rule in ((body or {}).get("results") or {}).values()
-               for r in rule.values()]
-    if not any(r.startswith("notification:sent") for r in results):
+    if not notifications_sent(body):
         log(f"health: hoseflow sent no notification for {source} {verdict}: "
             f"{json.dumps(body)[:300]}")
         return False
