@@ -33,3 +33,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# test this checkout's package, not whichever one the venv's editable install points at
+pythonpath = ["src"]

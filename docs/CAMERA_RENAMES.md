@@ -13,7 +13,7 @@ CB5–CB8 → Enchanted Forest / Cliffside / Trailer Path / North Entry).
 | station registry | `~/trailcam/landing/stations.json` | yes — rename entry / add entry with `device_id` |
 | analysis-time corrections | `~/trailcam/landing/station_overrides.json` | yes — add `device_id → new name` for the window the sidecars carry the old label |
 | detections (derived) | `~/trailcam/derived/detections.db` `captures.station` | no — `stages/detect.py` applies overrides when it writes new rows; old rows are covered by the sync mapping below |
-| log sync mapping | `scripts/sync_wildlife_log.py` `STATION_RENAMES` (+ `DEVICE_STATION` for the legacy export corpus) | yes — one line per rename |
+| log sync + security view mapping | `config/station_renames.json` (read by `scripts/sync_wildlife_log.py` and hoseserv's security view; `DEVICE_STATION` in the sync script covers the legacy export corpus) | yes — add a line to the JSON per rename |
 | the wildlife log | `~/trailcam/tags/wildlife.db` `sightings.station`, `stations` table | yes — see SQL below; keep the old name as an alias |
 | encounters (derived) | `~/trailcam/derived/encounters.db` | rebuild (`scripts/build_encounters.py --gap-min 90`; nightly does it too) |
 | Sage's station note | `~/sage/memory/trailcam-stations-and-cameras.md` | yes — Sage answers "which camera is which" from it |
@@ -53,8 +53,12 @@ row as `unmapped`. Use that as the check that nothing was missed.
 5. **Overrides** `station_overrides.json`: add `{device_id, start, end, station: NEW, reason}`.
    For a pure rename use `2020-01-01 … 2099-01-01`; for a move use the window during which the
    sidecars carried the wrong label. First matching override wins — order matters.
-6. **Sync mapping** `scripts/sync_wildlife_log.py`: add `"OLD": "NEW"` to `STATION_RENAMES`
-   (and update `DEVICE_STATION` if the device is one of the four legacy-export serials). Check:
+6. **Sync mapping**: add a line `"OLD": "NEW"` to `renames` in `config/station_renames.json`
+   (the vendor label without the `Cabin - ` prefix). A move that splits one camera name by date
+   goes in `special` as `{name, before, after, cutoff}` (see `Cabin - Madrone`). hoseserv's
+   security view reads the same file, so there is no second copy to edit. Update
+   `DEVICE_STATION` in `scripts/sync_wildlife_log.py` only if the device is one of the four
+   legacy-export serials. Check:
    `.venv/bin/python -c "import sys; sys.path.insert(0,'scripts'); import sync_wildlife_log as s; print(s.normalize_station('OLD','2026-09-12'))"`
 7. **Rebuild encounters**: `.venv/bin/python scripts/build_encounters.py --gap-min 90`
 8. **Sage note**: edit `~/sage/memory/trailcam-stations-and-cameras.md`.
@@ -62,7 +66,8 @@ row as `unmapped`. Use that as the check that nothing was missed.
    `get_stations()["unmapped_stations"]` should list nothing new, and
    `query_sightings(station='OLD')` should report `filters_applied.station == ['NEW']`.
 10. Run `.venv/bin/pytest -q`. Nothing to restart: the MCP opens the DB per call, and the
-    nightly sync picks up the mapping on its next run. The review app (8870) shows whatever
+    nightly sync picks up the mapping on its next run, and the security view rereads the JSON
+    when its mtime changes. The review app (8870) shows whatever
     `captures.station` says for old rows; that is cosmetic and regenerable.
 
 ## Gotchas seen

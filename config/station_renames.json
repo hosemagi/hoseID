@@ -1,0 +1,19 @@
+{
+  "renames": {
+    "Yard": "Cabin Yard",
+    "South Clearing": "Lost Woods",
+    "CB5": "Enchanted Forest",
+    "CB6": "Cliffside",
+    "CB7": "Trailer Path",
+    "CB8": "North Entry"
+  },
+  "strip_prefix": "Cabin - ",
+  "special": [
+    {
+      "name": "Cabin - Madrone",
+      "before": "Madrone (old spot)",
+      "after": "Trailer",
+      "cutoff": "2026-07-25"
+    }
+  ]
+}

@@ -20,6 +20,10 @@ import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
 
+# this repo's src first: the venv's editable install may point at another checkout
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from hoseid import station_renames  # noqa: E402
+
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 TAGS_DB = Path.home() / "trailcam/tags/tags.db"
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
@@ -48,18 +52,6 @@ CATEGORY = {
     "jackrabbit": "small_game", "squirrel": "small_game", "skunk": "small_game",
 }
 
-# Camera renames (old vendor label -> current log station). detections.db
-# captures written BEFORE the rename (and before station_overrides.json got
-# the device entry) still carry the old label; this keeps the log on the new
-# names. Add a line per rename; see docs/CAMERA_RENAMES.md.
-STATION_RENAMES = {
-    "South Clearing": "Lost Woods",      # 2026-09-12
-    "CB5": "Enchanted Forest",           # 2026-09-12
-    "CB6": "Cliffside",                  # 2026-09-12
-    "CB7": "Trailer Path",               # 2026-09-12
-    "CB8": "North Entry",                # 2026-09-12
-}
-
 # P's device->station mapping (2026-08-16) for the legacy Reveal corpus,
 # whose reviews carry only a device id. Mirrors ~/trailcam/landing/stations.json.
 DEVICE_STATION = {
@@ -71,22 +63,11 @@ DEVICE_STATION = {
 
 
 def normalize_station(name: str, date: str | None = None) -> str:
-    """Arlo camera names -> log station names ('Cabin - Yard' -> 'Cabin Yard',
-    'Cabin - Crossroads' -> 'Crossroads'); unknown names pass through.
-
-    The camera still named 'Madrone' in Arlo IS the log's Trailer station
-    (P, 2026-08-16: rename never happened after the 07/25 relocation).
-    Pre-07/25 captures from it are the prior spot — different ground — per
-    the log's own caveat. The camera named 'Trailer' in Arlo also watches
-    the trailer (two cameras, one station)."""
-    if name == "Cabin - Madrone":
-        return "Trailer" if (date is None or date >= "2026-07-25")             else "Madrone (old spot)"
-    if name == "Cabin - Yard":
-        return "Cabin Yard"
-    if name.startswith("Cabin - "):
-        name = name[len("Cabin - "):]
-    name = DEVICE_STATION.get(name, name)
-    return STATION_RENAMES.get(name, name)
+    """Camera / legacy device id -> log station name. The rename rules
+    (detections.db captures written BEFORE a rename still carry the old
+    label) live in config/station_renames.json, shared with hoseserv's
+    security view; add a line there per rename (docs/CAMERA_RENAMES.md)."""
+    return station_renames.normalize_station(DEVICE_STATION.get(name, name), date)
 
 
 def individuals_for(individual: str | None, species: str,
