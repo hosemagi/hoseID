@@ -53,6 +53,63 @@ EXIT_RESTART = 3
 SESSION_EXPIRY_EXPECTED_AFTER_S = 60 * 60
 
 
+def classify_failure(exc: Exception, failures: int,
+                     session_age: float) -> tuple[bool, bool, bool]:
+    """(restart, alert, routine) for one failed run of a source.
+
+    A frozen library or expired REST session never recovers without a
+    re-login, so waiting out the threshold only adds hours of silent loss
+    (5.5h on 2026-08-25, 2 days on 2026-08-30): restart on first detection.
+    A SessionDeadError past the expected session lifetime is routine -- no
+    alert, and no ERROR in the log (hoseserv's Stack panel and the improver
+    treat a newest line containing ERROR as broken). The separate "failing
+    repeatedly" notify at FAILURE_ALERT_THRESHOLD is not part of this."""
+    restart = (isinstance(exc, (LibraryFrozenError, SessionDeadError))
+               or failures >= FAILURE_RESTART_THRESHOLD)
+    routine = (isinstance(exc, SessionDeadError)
+               and session_age >= SESSION_EXPIRY_EXPECTED_AFTER_S)
+    return restart, restart and not routine, routine
+
+
+def run_source(name: str, fn, *, cfg: dict, failures: dict[str, int],
+               login_at: float, once: bool, stop) -> list[str]:
+    """Run one source pass; on failure log, alert and maybe exit for a
+    launchd restart. `stop` shuts down the Arlo fetcher before exiting."""
+    try:
+        new = fn() or []
+        failures[name] = 0
+        return new
+    except Exception as e:
+        failures[name] += 1
+        session_age = time.time() - login_at
+        restart, alert, routine = classify_failure(e, failures[name],
+                                                   session_age)
+        if once:
+            # --once never restarts, so a dead session there is unexpected
+            # and logs as an ERROR like any other failure.
+            restart = alert = routine = False
+        if routine:
+            log(f"{name}: session expired after {session_age / 60:.0f} min "
+                "(routine); restarting")
+        else:
+            log(f"{name}: ERROR ({failures[name]} consecutive): "
+                f"{type(e).__name__}: {e}")
+        if failures[name] == FAILURE_ALERT_THRESHOLD:
+            notify(cfg, f"hoseid-fetch: {name} failing repeatedly: {e}")
+        if restart:
+            if alert:
+                msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
+                       f"row; exiting for a launchd restart. Last: {e}")
+                log(msg)
+                notify(cfg, msg)
+            try:
+                stop()
+            except Exception:
+                pass
+            sys.exit(EXIT_RESTART)
+        return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true")
@@ -93,40 +150,9 @@ def main() -> int:
     failures = {"reveal": 0, "arlo": 0}
     next_run = {"reveal": 0.0, "arlo": 0.0}
 
-    def run_source(name: str, fn) -> list[str]:
-        try:
-            new = fn() or []
-            failures[name] = 0
-            return new
-        except Exception as e:
-            failures[name] += 1
-            log(f"{name}: ERROR ({failures[name]} consecutive): "
-                f"{type(e).__name__}: {e}")
-            if failures[name] == FAILURE_ALERT_THRESHOLD:
-                notify(cfg, f"hoseid-fetch: {name} failing repeatedly: {e}")
-            # A frozen library or expired REST session never recovers
-            # without a re-login, so waiting out the threshold only adds
-            # hours of silent loss (5.5h on 2026-08-25, 2 days on
-            # 2026-08-30). Restart on first detection.
-            restart_now = isinstance(e, (LibraryFrozenError, SessionDeadError))
-            if (restart_now or failures[name] >= FAILURE_RESTART_THRESHOLD) \
-                    and not args.once:
-                msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
-                       f"row; exiting for a launchd restart. Last: {e}")
-                log(msg)
-                session_age = time.time() - login_at
-                if (isinstance(e, SessionDeadError)
-                        and session_age >= SESSION_EXPIRY_EXPECTED_AFTER_S):
-                    log(f"{name}: session lived {session_age / 60:.0f} min; "
-                        "routine Arlo expiry, restarting without alert")
-                else:
-                    notify(cfg, msg)
-                try:
-                    arlo.stop()
-                except Exception:
-                    pass
-                sys.exit(EXIT_RESTART)
-            return []
+    def run(name: str, fn) -> list[str]:
+        return run_source(name, fn, cfg=cfg, failures=failures,
+                          login_at=login_at, once=args.once, stop=arlo.stop)
 
     log(f"hoseid-fetch up (reveal every {reveal_interval}s, "
         f"arlo sweep every {arlo_interval}s + event-driven)")
@@ -135,13 +161,13 @@ def main() -> int:
         now = time.time()
         fresh: list[str] = []
         if now >= next_run["reveal"]:
-            fresh += run_source("reveal", lambda: reveal_mod.poll(reveal, state))
+            fresh += run("reveal", lambda: reveal_mod.poll(reveal, state))
             next_run["reveal"] = now + reveal_interval
         if now >= next_run["arlo"] or arlo.sweep_wanted.is_set():
             if arlo.sweep_wanted.is_set():
                 arlo.sweep_wanted.clear()
                 time.sleep(20)   # debounce: let the clip finish uploading
-            fresh += run_source("arlo", arlo.sweep)
+            fresh += run("arlo", arlo.sweep)
             next_run["arlo"] = time.time() + arlo_interval
         if fresh:
             # Real-time path: analyze the new captures now, alert if warranted.
