@@ -18,14 +18,16 @@ def det_db(tmp_path, monkeypatch):
                                capture_time TEXT, media_type TEXT);
         CREATE TABLE detections (detection_id TEXT, asset_id TEXT, run_id TEXT,
             bbox_x REAL, bbox_y REAL, bbox_w REAL, bbox_h REAL, detector_class TEXT,
-            detector_confidence REAL, taxon TEXT, crop_path TEXT);
+            detector_confidence REAL, taxon TEXT, crop_path TEXT,
+            taxon_confidence REAL, taxon_raw TEXT);
     """)
     # 2026-10-26T12:50Z = 05:50 PDT: a pre-dawn capture
     conn.execute("INSERT INTO captures VALUES ('sha256:aa11', 'nightly', 'Bench', "
                  "'2026-10-26T12:50:00+00:00', 'video')")
-    conn.executemany("INSERT INTO detections VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
-        ("d1", "sha256:aa11", "nightly", .1, .1, .1, .1, "animal", .93, "mountain_lion", None),
-        ("d2", "sha256:aa11", "nightly", .8, .8, .1, .1, "animal", .40, "blacktail", None),
+    conn.executemany("INSERT INTO detections VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        ("d1", "sha256:aa11", "nightly", .1, .1, .2, .4, "animal", .93, "mountain_lion", None,
+         .3024, "u;mammalia;carnivora;felidae;puma;concolor;puma"),
+        ("d2", "sha256:aa11", "nightly", .8, .8, .1, .1, "animal", .40, "blacktail", None, None, None),
     ])
     conn.commit()
     conn.close()
@@ -90,6 +92,11 @@ def test_every_detection_forwarded_with_event_fields(det_db, webhook, operator, 
     assert lion["reason"] == "mountain_lion"
     assert (lion["capture_hhmm"], lion["capture_hour"]) == ("05:50", 5)
     assert lion["video_suffix"] == " [VIDEO]"
+    assert (lion["taxon_confidence"], lion["taxon_confidence_pct"]) == (0.3024, "30%")
+    assert lion["species_guess"] == "puma"
+    assert lion["box_area"] == 0.08
+    deer = webhook.calls[1]["json"]
+    assert (deer["taxon_confidence"], deer["taxon_confidence_pct"], deer["species_guess"]) == (None, "", "")
     assert operator == []
 
 

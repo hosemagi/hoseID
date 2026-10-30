@@ -129,6 +129,11 @@ def build_event(det, cap, device_id: str | None, image: Path | None) -> dict:
     conf = det["detector_confidence"]
     local = _local_capture_time(cap["capture_time"])
     label = taxon.replace("_", " ") if taxon else det["detector_class"]
+    # The classifier's own certainty and raw guess, separate from the
+    # detector's "some animal is here" confidence above: a 98% detection can
+    # carry a 30% species call (a bear rolled up to unknown_mustelid).
+    tconf = det["taxon_confidence"]
+    raw = [p for p in (det["taxon_raw"] or "").split(";")[1:] if p]
     return {
         "asset_id": cap["asset_id"],
         "station": cap["station"],
@@ -139,6 +144,11 @@ def build_event(det, cap, device_id: str | None, image: Path | None) -> dict:
         "confidence_pct": f"{conf:.0%}",
         "label": label,
         "reason": taxon or det["detector_class"],
+        "taxon_confidence": round(tconf, 4) if tconf is not None else None,
+        "taxon_confidence_pct": f"{tconf:.0%}" if tconf is not None else "",
+        "species_guess": raw[-1] if raw else "",
+        # share of the frame the box covers, 0-1: big = near or large animal
+        "box_area": round(det["bbox_w"] * det["bbox_h"], 4),
         "capture_time": cap["capture_time"],
         "capture_hhmm": local.strftime("%H:%M"),
         # capture hour (not processing hour): a 05:50 capture ingested at
