@@ -43,6 +43,12 @@
 - No direct-ntfy fallback. 3 failed batches in a row (webhook down, or a rule
   fired but its notification wasn't delivered) send one "alerts DOWN" via
   `common.notify()`, which goes straight to ntfy.
+- Fetch-source outages (`common.report_health`, from `daemon.run_source`)
+  POST `{source, verdict: BROKEN|HEALTHY, failures, error}` to hoseserv's
+  `hoseid-fetch-health` webhook once per transition (verdict kept in
+  fetch-state.json); those keys are a contract with the `fetch-*` rules in
+  hoseserv docs/ALERTS.md. Unless hoseflow reports a notification sent, it
+  falls back to `notify()` (ntfy).
 - After editing it, restart the fetch daemon:
   `sudo launchctl kickstart -k system/com.hoseid.fetch`.
 

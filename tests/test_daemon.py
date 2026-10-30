@@ -53,6 +53,12 @@ def captured(monkeypatch):
     lines, notes = [], []
     monkeypatch.setattr(daemon, "log", lines.append)
     monkeypatch.setattr(daemon, "notify", lambda cfg, msg: notes.append(msg))
+    # The "failing repeatedly" page now goes through report_health; record
+    # its fallback message as hoseflow-down would (tests/test_fetch_health.py
+    # covers the hoseflow path).
+    monkeypatch.setattr(daemon, "report_health",
+                        lambda cfg, state, name, ok, failures, error, msg:
+                        None if ok else notes.append(msg))
     return lines, notes
 
 
@@ -64,7 +70,7 @@ def _run(session_age, *, once=False, exc=None, stopped=None):
 
     failures = {"reveal": 0, "arlo": 0}
     result = daemon.run_source(
-        "arlo", sweep, cfg={}, failures=failures,
+        "arlo", sweep, cfg={}, state=None, failures=failures,
         login_at=time.time() - session_age, once=once,
         stop=lambda: stopped.append(True))
     return result, failures, stopped
@@ -110,7 +116,7 @@ def test_transient_failure_logs_error_and_keeps_running(captured):
 def test_success_resets_failures(captured):
     failures = {"arlo": 3}
     new = daemon.run_source("arlo", lambda: ["sha256:aa"], cfg={},
-                            failures=failures, login_at=time.time(),
+                            state=None, failures=failures, login_at=time.time(),
                             once=False, stop=lambda: None)
     assert new == ["sha256:aa"] and failures["arlo"] == 0
 
@@ -145,8 +151,8 @@ def _reveal(exc, failures, *, once=False):
         if exc is None:
             return ["sha256:bb"]
         raise exc
-    return daemon.run_source("reveal", poll, cfg={}, failures=failures,
-                             login_at=time.time(), once=once,
+    return daemon.run_source("reveal", poll, cfg={}, state=None,
+                             failures=failures, login_at=time.time(), once=once,
                              stop=lambda: None)
 
 

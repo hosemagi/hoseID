@@ -35,7 +35,8 @@ from fetchers import alerts  # noqa: E402
 from fetchers import reveal as reveal_mod  # noqa: E402
 from fetchers.arlo import (ArloFetcher, LibraryFrozenError,  # noqa: E402
                            SessionDeadError)
-from fetchers.common import State, load_config, log, notify  # noqa: E402
+from fetchers.common import (State, load_config, log, notify,  # noqa: E402
+                             report_health)
 
 FAILURE_ALERT_THRESHOLD = 5
 # Consecutive failures of one source after which the whole process exits so
@@ -70,7 +71,7 @@ def classify_failure(exc: Exception, failures: int,
     A SessionDeadError past the expected session lifetime is routine -- no
     alert, and no ERROR in the log (hoseserv's Stack panel and the improver
     treat a newest line containing ERROR as broken). The separate "failing
-    repeatedly" notify at FAILURE_ALERT_THRESHOLD is not part of this."""
+    repeatedly" report_health at FAILURE_ALERT_THRESHOLD is not part of this."""
     restart = (isinstance(exc, (LibraryFrozenError, SessionDeadError))
                or failures >= FAILURE_RESTART_THRESHOLD)
     routine = (isinstance(exc, SessionDeadError)
@@ -92,12 +93,15 @@ def is_transient_reveal(exc: Exception, name: str, failures: int) -> bool:
     return False
 
 
-def run_source(name: str, fn, *, cfg: dict, failures: dict[str, int],
-               login_at: float, once: bool, stop) -> list[str]:
+def run_source(name: str, fn, *, cfg: dict, state: State,
+               failures: dict[str, int], login_at: float, once: bool,
+               stop) -> list[str]:
     """Run one source pass; on failure log, alert and maybe exit for a
-    launchd restart. `stop` shuts down the Arlo fetcher before exiting."""
+    launchd restart. `stop` shuts down the Arlo fetcher before exiting.
+    BROKEN/HEALTHY transitions go to hoseflow via report_health()."""
     try:
         new = fn() or []
+        report_health(cfg, state, name, True, failures[name], None, "")
         failures[name] = 0
         return new
     except Exception as e:
@@ -119,7 +123,9 @@ def run_source(name: str, fn, *, cfg: dict, failures: dict[str, int],
             log(f"{name}: ERROR ({failures[name]} consecutive): "
                 f"{type(e).__name__}: {e}")
         if failures[name] == FAILURE_ALERT_THRESHOLD:
-            notify(cfg, f"hoseid-fetch: {name} failing repeatedly: {e}")
+            report_health(cfg, state, name, False, failures[name],
+                          f"{type(e).__name__}: {e}",
+                          f"hoseid-fetch: {name} failing repeatedly: {e}")
         if restart:
             if alert:
                 msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
@@ -175,7 +181,7 @@ def main() -> int:
     next_run = {"reveal": 0.0, "arlo": 0.0}
 
     def run(name: str, fn) -> list[str]:
-        return run_source(name, fn, cfg=cfg, failures=failures,
+        return run_source(name, fn, cfg=cfg, state=state, failures=failures,
                           login_at=login_at, once=args.once, stop=arlo.stop)
 
     log(f"hoseid-fetch up (reveal every {reveal_interval}s, "
