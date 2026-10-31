@@ -12,14 +12,19 @@ than high confidence purely because of the implicit zone.
 """
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import requests
 
-from .common import TMP_DIR, State, download, ingest, log
-from hoseid.landing import ImmutabilityError  # noqa: E402 (sys.path set by .common)
+from .common import TMP_DIR, State, download, ingest, log, now_utc
+from hoseid import paths  # noqa: E402 (sys.path set by .common)
+from hoseid.landing import ImmutabilityError  # noqa: E402
+from hoseid.station_renames import normalize_station  # noqa: E402
 
 COGNITO = "https://cognito-idp.us-east-1.amazonaws.com/"
 CLIENT_ID = "6r9tpojvgvkci5trla0ip14mon"
@@ -97,6 +102,65 @@ def _capture_time(item: dict) -> datetime:
                     tzinfo=PROPERTY_TZ)
 
 
+def _conditions(item: dict) -> dict:
+    meta = item.get("metadata") or {}
+    return {
+        "battery_pct": int(meta["batteryLevel"]) if meta.get("batteryLevel") else None,
+        "signal_bars": int(meta["signal"]) if meta.get("signal") else None,
+    }
+
+
+def _note_health(readings: dict, item: dict, conditions: dict) -> None:
+    """Keep the newest battery/signal reading per (renamed) station. Newest
+    by capture time, not fetch order: Reveal re-serves old photos with their
+    old telemetry."""
+    if conditions["battery_pct"] is None and conditions["signal_bars"] is None:
+        return
+    when = _capture_time(item)
+    station = normalize_station(item.get("cameraName") or "unknown",
+                                when.date().isoformat())
+    prev = readings.get(station)
+    if prev is None or when > prev["when"]:
+        readings[station] = {**conditions, "when": when}
+
+
+def write_station_health(readings: dict, path=None) -> None:
+    """Merge readings into station_health.json (read by hoseserv's map and
+    Security view), keeping an existing entry whose reading is newer.
+    Replaced atomically so a reader never sees half a file."""
+    path = path or paths.station_health_file()
+    try:
+        old = json.loads(path.read_text()).get("stations", {})
+        if not isinstance(old, dict):
+            old = {}
+    except (OSError, ValueError, AttributeError):
+        old = {}
+    stations = dict(old)
+    for name, r in readings.items():
+        when = r["when"].astimezone(timezone.utc)
+        try:
+            prev = datetime.fromisoformat(old[name]["capture_time"])
+            if prev.tzinfo is not None and prev >= when:
+                continue
+        except (KeyError, TypeError, ValueError):
+            pass
+        stations[name] = {"battery_pct": r["battery_pct"],
+                          "signal_bars": r["signal_bars"],
+                          "capture_time": when.isoformat()}
+    body = json.dumps({"updated": now_utc().isoformat(timespec="seconds"),
+                       "stations": stations}, indent=1, sort_keys=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(body + "\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
 def poll(client: RevealClient, state: State) -> list[str]:
     """One poll pass: fetch photos newer than the cursor, ingest, advance.
 
@@ -126,8 +190,11 @@ def poll(client: RevealClient, state: State) -> list[str]:
     ingested = 0
     conflicts = 0
     new_assets: list[str] = []
+    readings: dict[str, dict] = {}
     for item in sorted(new_items, key=lambda p: p["createdTimestamp"]):
         pid = item["photoId"]
+        conditions = _conditions(item)
+        _note_health(readings, item, conditions)
         tmp = download(item["photoUrl"], TMP_DIR / pid)
         sidecar = dict(
             media_type="image",
@@ -141,12 +208,7 @@ def poll(client: RevealClient, state: State) -> list[str]:
             capture_time=_capture_time(item),
             capture_time_source="vendor_api",
             capture_time_confidence="medium",
-            conditions={
-                "battery_pct": int(item["metadata"]["batteryLevel"])
-                if item.get("metadata", {}).get("batteryLevel") else None,
-                "signal_bars": int(item["metadata"]["signal"])
-                if item.get("metadata", {}).get("signal") else None,
-            },
+            conditions=conditions,
             trigger_type="motion",
             raw_vendor_payload=item,
         )
@@ -175,6 +237,12 @@ def poll(client: RevealClient, state: State) -> list[str]:
                 ingested += 1
                 new_assets.append(result.asset_id)
         state.set("reveal_cursor_ms", item["createdTimestamp"])
+    if readings:
+        # Best effort: a battery badge is never worth blocking ingest over.
+        try:
+            write_station_health(readings)
+        except Exception as e:
+            log(f"reveal: station health not written: {type(e).__name__}: {e}")
     if new_items:
         log(f"reveal: {len(new_items)} new, {ingested} ingested "
             f"({len(new_items) - ingested - conflicts} already present, "

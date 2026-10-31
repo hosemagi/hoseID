@@ -47,6 +47,15 @@ def station_overrides_file() -> Path:
     return landing_dir() / "station_overrides.json"
 
 
+def station_health_file() -> Path:
+    """Newest battery/signal reading per station, rewritten by the Reveal fetcher.
+
+    Not landing data (it is overwritten in place); it lives here because hoseserv's
+    map and Security view already read stations.json from this directory.
+    """
+    return landing_dir() / "station_health.json"
+
+
 # --- derived layer (regenerable) ---------------------------------------------
 def derived_dir() -> Path:
     return root() / "derived"
