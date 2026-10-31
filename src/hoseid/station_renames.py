@@ -11,11 +11,12 @@ docs/CAMERA_RENAMES.md.
                   {name, before, after, cutoff}; a capture on or after the
                   cutoff (local YYYY-MM-DD) is `after`, earlier is `before`
 
-The camera still named 'Madrone' in Arlo IS the log's Trailer station
-(P, 2026-08-16: rename never happened after the 07/25 relocation).
-Pre-07/25 captures from it are the prior spot — different ground — per
-the log's own caveat. The camera named 'Trailer' in Arlo also watches
-the trailer (two cameras, one station).
+Stations are named after the Arlo camera (P, 2026-10-30): 'Cabin - Madrone'
+is station Madrone (at the trailer since its 07/25 move; earlier captures
+are 'Madrone (old spot)', different ground), and 'Cabin - Trailer' is
+station Trailer. A camera renamed in the Arlo app is followed automatically
+by device id (hoseid.camera_names, run by the fetch daemon), which edits this
+file so captures stored under the old label still land on the new station.
 """
 from __future__ import annotations
 

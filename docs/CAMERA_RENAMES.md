@@ -1,5 +1,13 @@
 # Camera renames and moves — runbook
 
+> **Arlo cameras rename themselves (2026-10-30).** Rename the camera in the Arlo app and the
+> fetch daemon follows it by device id within ~2 h (every connect and sweep):
+> `hoseid.camera_names` updates `station_renames.json` (old label → new station),
+> `station_overrides.json`, `stations.json`, `wildlife.db` (sightings + stations row, old label
+> kept as an alias), `detections.db`, and hosemap layers, then posts a note to the shared
+> Logbook. A rename onto a name another camera already uses is refused and alerted. Still by
+> hand: Sage's station note (below) and prose in the log. Reveal cameras still use this runbook.
+
 P renames cameras in the vendor app (Reveal / Arlo) when he moves them. The vendor label *is*
 the station name, but it reaches the system through several layers that do not update
 themselves. This is the checklist that worked on 2026-09-12 (South Clearing → Lost Woods,

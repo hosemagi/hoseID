@@ -27,8 +27,8 @@ sync = _sync()
 # (camera name, local day, log station); kept identical in hoseserv
 TABLE = [
     ("Cabin - Madrone", "2026-07-24", "Madrone (old spot)"),
-    ("Cabin - Madrone", "2026-07-25", "Trailer"),
-    ("Cabin - Madrone", None, "Trailer"),
+    ("Cabin - Madrone", "2026-07-25", "Madrone"),
+    ("Cabin - Madrone", None, "Madrone"),
     ("Cabin - Yard", "2026-09-01", "Cabin Yard"),
     ("Cabin - Crossroads", "2026-09-01", "Crossroads"),
     ("CB5", "2026-09-01", "Enchanted Forest"),

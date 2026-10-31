@@ -133,6 +133,33 @@ class ArloFetcher:
         log(f"arlo: connected, {len(watched)} cameras, event stream live"
             + (f" ({skipped} excluded by prefix {self._excluded_prefixes})"
                if skipped else ""))
+        self.follow_renames()
+
+    def follow_renames(self) -> None:
+        """A camera renamed in the Arlo app renames its station everywhere
+        (hoseid.camera_names), matched by device id. Never raises: a failed
+        rename is logged and alerted, and the sweep goes on."""
+        from hoseid import camera_names
+        try:
+            seen = self._state.get("arlo_names", {})
+            cams = [(c.device_id, c.name) for c in self._arlo.cameras
+                    if not self.is_excluded(c.name)]
+            renames = camera_names.reconcile(cams, seen)
+            self._state.set("arlo_names", seen)
+        except Exception as e:  # noqa: BLE001
+            log(f"arlo: ERROR following camera renames: {type(e).__name__}: {e}")
+            notify(self._cfg, f"hoseid-fetch: camera rename failed: {e}")
+            return
+        for r in renames:
+            log(f"arlo: {r.summary()}")
+            if not r.applied:
+                notify(self._cfg, f"hoseid-fetch: {r.summary()}")
+                continue
+            base, key = _hoseserv(self._cfg)
+            layers = camera_names.rename_in_map_layers(base, key, r.old_station, r.new_station)
+            _logbook_note(base, key, r.summary(),
+                          f"device {r.device_id}; Arlo name {r.old_label!r} → {r.new_label!r}"
+                          + (f"; {layers} map layer(s) updated" if layers else ""))
 
     def is_excluded(self, station: str | None) -> bool:
         return bool(station) and station.startswith(self._excluded_prefixes)
@@ -165,6 +192,7 @@ class ArloFetcher:
     def sweep(self) -> list[str]:
         """Download every cloud recording newer than each camera's cursor."""
         self._assert_session_alive()
+        self.follow_renames()
         cursors = self._state.get("arlo_cursors", {})
         ingested = 0
         newest_by_cam: dict[str, int] = {}
@@ -304,3 +332,21 @@ class ArloFetcher:
     def stop(self) -> None:
         if self._arlo:
             self._arlo.stop(logout=False)
+
+
+def _hoseserv(cfg: dict) -> tuple[str, str]:
+    """hoseserv's base URL and API key, from the [alerts] webhook settings."""
+    from .common import DEFAULT_WEBHOOK
+    alerts = cfg.get("alerts", {})
+    url = alerts.get("hoseflow_url") or DEFAULT_WEBHOOK
+    return url.split("/api/", 1)[0], alerts.get("hoseflow_api_key", "")
+
+
+def _logbook_note(base: str, key: str, text: str, detail: str) -> None:
+    """Record a camera rename in the shared logbook. Best effort."""
+    import requests
+    try:
+        requests.post(f"{base}/api/v1/logbook/notes", json={"text": text, "detail": detail},
+                      headers={"X-Api-Key": key}, timeout=15, verify=False).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        log(f"arlo: logbook note failed: {type(e).__name__}: {e}")
