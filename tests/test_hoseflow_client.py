@@ -74,12 +74,24 @@ def test_post_returns_body_with_key_and_loopback_tls(monkeypatch, logged):
         calls.append((url, kw))
         return Resp(body={"fired": True, "results": {}})
     monkeypatch.setattr(common.requests, "post", post)
-    assert common.post_to_hoseflow("https://h/w", "k", {"a": 1}, "alerts") \
+    url = "https://127.0.0.1:8000/w"
+    assert common.post_to_hoseflow(url, "k", {"a": 1}, "alerts") \
         == {"fired": True, "results": {}}
-    assert calls == [("https://h/w", {"json": {"a": 1}, "timeout": 30,
-                                      "verify": False,
-                                      "headers": {"X-Api-Key": "k"}})]
+    assert calls == [(url, {"json": {"a": 1}, "timeout": 30,
+                            "verify": False,
+                            "headers": {"X-Api-Key": "k"}})]
     assert logged == []
+
+
+def test_post_verifies_tls_off_loopback(monkeypatch, logged):
+    calls = []
+
+    def post(url, **kw):
+        calls.append(kw["verify"])
+        return Resp(body={})
+    monkeypatch.setattr(common.requests, "post", post)
+    common.post_to_hoseflow("https://h/w", "k", {}, "alerts")
+    assert calls == [True]
 
 
 @pytest.mark.parametrize("label", ["alerts", "health"])

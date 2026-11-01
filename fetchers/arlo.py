@@ -22,6 +22,8 @@ from pathlib import Path
 
 from .common import TMP_DIR, State, ingest, log, notify
 
+from hoseid import hoseserv  # noqa: E402 (sys.path set by .common)
+
 SESSION_DIR = Path.home() / ".config/hoseid-fetch/arlo-session"
 
 # Events that mean a clip was actually written to the cloud, as opposed to
@@ -155,7 +157,7 @@ class ArloFetcher:
             if not r.applied:
                 notify(self._cfg, f"hoseid-fetch: {r.summary()}")
                 continue
-            base, key = _hoseserv(self._cfg)
+            base, key = hoseserv.base_url(self._cfg), hoseserv.api_key(self._cfg)
             layers = camera_names.rename_in_map_layers(base, key, r.old_station, r.new_station)
             _logbook_note(base, key, r.summary(),
                           f"device {r.device_id}; Arlo name {r.old_label!r} → {r.new_label!r}"
@@ -334,19 +336,8 @@ class ArloFetcher:
             self._arlo.stop(logout=False)
 
 
-def _hoseserv(cfg: dict) -> tuple[str, str]:
-    """hoseserv's base URL and API key, from the [alerts] webhook settings."""
-    from .common import DEFAULT_WEBHOOK
-    alerts = cfg.get("alerts", {})
-    url = alerts.get("hoseflow_url") or DEFAULT_WEBHOOK
-    return url.split("/api/", 1)[0], alerts.get("hoseflow_api_key", "")
-
-
 def _logbook_note(base: str, key: str, text: str, detail: str) -> None:
     """Record a camera rename in the shared logbook. Best effort."""
-    import requests
-    try:
-        requests.post(f"{base}/api/v1/logbook/notes", json={"text": text, "detail": detail},
-                      headers={"X-Api-Key": key}, timeout=15, verify=False).raise_for_status()
-    except Exception as e:  # noqa: BLE001
-        log(f"arlo: logbook note failed: {type(e).__name__}: {e}")
+    hoseserv.request("POST", f"{base}/api/v1/logbook/notes", key,
+                     json={"text": text, "detail": detail}, timeout=15,
+                     label="arlo: logbook note", log=log)

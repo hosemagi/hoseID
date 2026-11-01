@@ -53,8 +53,8 @@ LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
 WEBHOOK_FAIL_ALERT_AFTER = 3
 
-# Loopback to hoseserv's self-signed cert; verify=False is scoped to
-# common.post_to_hoseflow.
+# Loopback to hoseserv's self-signed cert; verify is off for loopback hosts
+# only (hoseid.hoseserv.verify_for), in common.post_to_hoseflow.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 

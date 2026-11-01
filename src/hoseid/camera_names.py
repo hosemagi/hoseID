@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import paths, station_renames
+from . import hoseserv, paths, station_renames
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 
@@ -196,10 +196,11 @@ def rename_in_map_layers(base_url: str, api_key: str, old: str, new: str,
     if request is None:
         import requests
         request = requests.request
-    headers = {"X-Api-Key": api_key}
+    headers = hoseserv.headers(api_key)
     api = f"{base_url.rstrip('/')}/api/v1/hosemap"
+    verify = hoseserv.verify_for(api)
     try:
-        resp = request("GET", f"{api}/layers", headers=headers, timeout=15, verify=False)
+        resp = request("GET", f"{api}/layers", headers=headers, timeout=15, verify=verify)
         resp.raise_for_status()
         layers = resp.json()
         layers = layers.get("layers", layers) if isinstance(layers, dict) else layers
@@ -208,7 +209,7 @@ def rename_in_map_layers(base_url: str, api_key: str, old: str, new: str,
             if old in (layer.get("trailcam_ids") or []):
                 for method, station in (("POST", new), ("DELETE", old)):
                     request(method, f"{api}/layers/{layer['id']}/trailcams/{station}",
-                            headers=headers, timeout=15, verify=False).raise_for_status()
+                            headers=headers, timeout=15, verify=verify).raise_for_status()
                 n += 1
         return n
     except Exception:  # noqa: BLE001 — the map is a nicety; the log says so

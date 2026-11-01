@@ -155,7 +155,7 @@ def test_payload_contract_and_alerts_creds(webhook, ntfy):
     assert call["json"] == {"source": "arlo", "verdict": "BROKEN",
                             "failures": 5, "error": "x" * 200}
     assert call["headers"] == {"X-Api-Key": "secret"}
-    assert call["verify"] is False
+    assert call["verify"] is True  # not loopback: hoseid.hoseserv.verify_for
     assert call["url"] == ("https://nvlm:8000/api/v1/hoseflow/webhooks/"
                            "hoseid-fetch-health")
 

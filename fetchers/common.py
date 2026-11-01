@@ -16,7 +16,7 @@ import requests
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-from hoseid import paths  # noqa: E402
+from hoseid import hoseserv, paths  # noqa: E402
 from hoseid.landing import StoreResult, store_asset  # noqa: E402
 from hoseid.sidecar import Sidecar, compute_asset_id  # noqa: E402
 
@@ -114,7 +114,7 @@ def notify(cfg: dict, message: str, title: str = "hoseid-fetch") -> None:
         log(f"notify: send failed: {type(e).__name__}: {e}")
 
 
-DEFAULT_WEBHOOK = "https://127.0.0.1:8000/api/v1/hoseflow/webhooks/wildlife-webhook"
+DEFAULT_WEBHOOK = hoseserv.DEFAULT_WEBHOOK
 HEALTH_DEVICE = "hoseid-fetch-health"
 
 
@@ -124,7 +124,7 @@ def health_url(cfg: dict) -> str:
     url = cfg.get("notify", {}).get("hoseflow_health_url", "")
     if url:
         return url
-    base = cfg.get("alerts", {}).get("hoseflow_url") or DEFAULT_WEBHOOK
+    base = hoseserv.webhook_url(cfg)
     return f"{base.rstrip('/').rsplit('/', 1)[0]}/{HEALTH_DEVICE}"
 
 
@@ -136,9 +136,10 @@ def post_to_hoseflow(url: str, key: str, payload: dict,
     """POST one event to a hoseflow webhook; hoseflow's {fired, results}, or
     None (logged under ``label``) on any failure. Never raises."""
     try:
-        # Loopback to hoseserv's self-signed cert; verify=False is scoped here.
-        resp = requests.post(url, json=payload, timeout=30, verify=False,
-                             headers={"X-Api-Key": key})
+        # hoseserv's self-signed cert: verify is off for loopback only.
+        resp = requests.post(url, json=payload, timeout=30,
+                             verify=hoseserv.verify_for(url),
+                             headers=hoseserv.headers(key))
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
