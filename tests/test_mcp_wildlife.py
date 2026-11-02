@@ -496,3 +496,15 @@ def test_db_without_sex_column_still_answers(root):
     assert queries.query_sightings({"sex": "none"})["sighting_count"] == 9
     assert queries.query_sightings({}, "rows", limit=1)["rows"][0]["sex"] is None
     assert queries.get_schema()["sex_in_use"] == []
+
+
+def test_health_route_answers_without_an_mcp_session():
+    """hoseserv's stack panel probes GET /health. TestClient without ``with``
+    never starts the lifespan, so no MCP session manager is running."""
+    from starlette.testclient import TestClient
+
+    from hoseid.mcp_wildlife.server import build_starlette_app
+    client = TestClient(build_starlette_app(host="127.0.0.1", port=8853))
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}

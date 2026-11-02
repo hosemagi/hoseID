@@ -27,6 +27,8 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent, ToolAnnotations
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from hoseid.mcp_wildlife import media as _media
 from hoseid.mcp_wildlife import queries as _q
@@ -390,6 +392,11 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
         if mime != "video/mp4":
             raise ValueError(f"media {index} of sighting {sighting_id} is {mime}, not mp4")
         return data
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> JSONResponse:
+        """Liveness for hoseserv's stack panel: no MCP session needed."""
+        return JSONResponse({"ok": True})
 
     return mcp
 
