@@ -56,6 +56,13 @@ def station_health_file() -> Path:
     return landing_dir() / "station_health.json"
 
 
+def station_health_history_file() -> Path:
+    """One battery sample per station per day (capped at 180 days), rewritten by
+    the Reveal fetcher next to station_health.json; hoseserv estimates days left
+    from it."""
+    return landing_dir() / "station_health_history.jsonl"
+
+
 # --- derived layer (regenerable) ---------------------------------------------
 def derived_dir() -> Path:
     return root() / "derived"

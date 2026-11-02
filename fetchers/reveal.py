@@ -16,7 +16,7 @@ import json
 import os
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -31,6 +31,7 @@ CLIENT_ID = "6r9tpojvgvkci5trla0ip14mon"
 API = "https://api.reveal.ishareit.net/v1"
 UA = "RevealWeb/5.4.0"
 PROPERTY_TZ = ZoneInfo("America/Los_Angeles")
+HISTORY_DAYS = 180        # station_health_history.jsonl keeps this many days
 PAGE_SIZE = 100
 
 
@@ -149,11 +150,67 @@ def write_station_health(readings: dict, path=None) -> None:
                           "capture_time": when.isoformat()}
     body = json.dumps({"updated": now_utc().isoformat(timespec="seconds"),
                        "stations": stations}, indent=1, sort_keys=True)
+    _replace_file(path, body + "\n")
+
+
+def _history_row(line: str) -> dict | None:
+    """One well-formed station_health_history.jsonl line, else None."""
+    try:
+        row = json.loads(line)
+        date.fromisoformat(row["date"])
+        if not (isinstance(row["station"], str) and isinstance(row["capture_time"], str)
+                and isinstance(row["battery_pct"], int)):
+            return None
+    except (ValueError, TypeError, KeyError):
+        return None
+    return {k: row[k] for k in ("date", "station", "battery_pct", "capture_time")}
+
+
+def append_health_history(readings: dict, path=None, today: date | None = None) -> None:
+    """Record one battery sample per station per property-local day in
+    station_health_history.jsonl (hoseserv fits its "days left" estimate to
+    it). A same-day sample is replaced only by a later capture; days older
+    than HISTORY_DAYS are dropped. The file is tiny, so it is rewritten whole
+    and replaced atomically; unreadable lines are discarded."""
+    path = path or paths.station_health_history_file()
+    try:
+        text = path.read_text()
+    except (OSError, ValueError):
+        text = ""
+    rows: dict[tuple[str, str], dict] = {}
+    for line in text.splitlines():
+        row = _history_row(line)
+        if row is not None:
+            rows[(row["date"], row["station"])] = row
+    for name, r in readings.items():
+        if r.get("battery_pct") is None:
+            continue
+        when = r["when"].astimezone(timezone.utc)
+        key = (r["when"].astimezone(PROPERTY_TZ).date().isoformat(), name)
+        try:
+            prev = datetime.fromisoformat(rows[key]["capture_time"])
+            if prev.tzinfo is not None and prev >= when:
+                continue
+        except (KeyError, ValueError):
+            pass
+        rows[key] = {"date": key[0], "station": name,
+                     "battery_pct": int(r["battery_pct"]),
+                     "capture_time": when.isoformat()}
+    today = today or now_utc().astimezone(PROPERTY_TZ).date()
+    cutoff = (today - timedelta(days=HISTORY_DAYS)).isoformat()
+    body = "".join(json.dumps(rows[k], sort_keys=True) + "\n"
+                   for k in sorted(rows) if k[0] >= cutoff)
+    _replace_file(path, body)
+
+
+def _replace_file(path, body: str) -> None:
+    """Write body to path via a temp file + os.replace, so a reader never
+    sees half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w") as fh:
-            fh.write(body + "\n")
+            fh.write(body)
         os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except BaseException:
@@ -243,6 +300,10 @@ def poll(client: RevealClient, state: State) -> list[str]:
             write_station_health(readings)
         except Exception as e:
             log(f"reveal: station health not written: {type(e).__name__}: {e}")
+        try:
+            append_health_history(readings)
+        except Exception as e:
+            log(f"reveal: station health history not written: {type(e).__name__}: {e}")
     if new_items:
         log(f"reveal: {len(new_items)} new, {ingested} ingested "
             f"({len(new_items) - ingested - conflicts} already present, "
