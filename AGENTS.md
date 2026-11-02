@@ -40,6 +40,12 @@
 - The event fields in `build_event()` are a contract with those rules'
   `match` clauses and `{field}` message templates — renaming one silently
   breaks alerts. Taxon labels are classifier labels (deer = `blacktail`).
+- `sex_guess` ("buck"/"doe"/"") is part of that contract: the capture's max
+  `detections.buck_prob` (stages/sex.py, migration 004) against the current
+  buck/doe model's own `metrics.json` threshold. The raw score is deliberately
+  NOT in the payload (uncalibrated; the threshold is ~0.001). The sex step in
+  `run_pipeline_incremental` is best-effort: its failure logs, never returns
+  False (that would count toward "alerts DOWN").
 - No direct-ntfy fallback. 3 failed batches in a row (webhook down, or a rule
   fired but its notification wasn't delivered) send one "alerts DOWN" via
   `common.notify()`, which goes straight to ntfy.

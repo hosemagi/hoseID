@@ -17,10 +17,9 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from training.sex.common import OUT  # noqa: E402
-
-MODEL = "dinov2_vitb14"
-SIZE = 448  # multiple of the 14 px patch
+from training.sex.common import DINO_MODEL as MODEL  # noqa: E402
+from training.sex.common import DINO_SIZE as SIZE  # noqa: E402
+from training.sex.common import OUT, dino_features  # noqa: E402
 
 
 def main() -> int:
@@ -31,18 +30,9 @@ def main() -> int:
     rows = [json.loads(line) for line in (OUT / "rows.jsonl").read_text().splitlines() if line]
     dev = "mps" if torch.backends.mps.is_available() else "cpu"
     model = torch.hub.load("facebookresearch/dinov2", MODEL).eval().to(dev)
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
     def feats(imgs):
-        x = torch.stack([torch.from_numpy(np.asarray(im.resize((SIZE, SIZE), Image.BICUBIC),
-                                                     dtype=np.float32) / 255).permute(2, 0, 1)
-                         for im in imgs])
-        x = ((x - mean) / std).to(dev)
-        with torch.no_grad():
-            out = model.forward_features(x)
-        return (out["x_norm_clstoken"].cpu().numpy(),
-                out["x_norm_patchtokens"].mean(1).cpu().numpy())
+        return dino_features(model, imgs, dev, SIZE)
 
     acc = {k: [] for k in ("X_cls", "X_mean", "Xf_cls", "Xf_mean")}
     B = 16

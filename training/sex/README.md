@@ -2,8 +2,13 @@
 
 Predicts "at least one buck present" for a deer capture, trained on the
 hand-reviewed sex tags in `tags/wildlife.db` (M = at least one male present,
-F = no male). Not wired into the pipeline yet; `current` is what a future
-`stages/sex.py` would load.
+F = no male). `stages/sex.py` (.venv-classifier) loads `current` and writes
+`detections.buck_prob` for blacktail crops; the fetch daemon runs it after
+classify (best-effort, at most 200 crops a pass, newest first) and the
+wildlife webhook carries `sex_guess` ("buck"/"doe", "" with no model or for
+other taxa): capture max over crops vs this run's `metrics.json` threshold.
+A run whose `backbone.json` sha256 doesn't match the cached DINOv2 weights is
+not used. Feature code shared with `embed_dino.py` is in `common.py`.
 
 ## How it's built
 - `detect_legacy.py` (.venv-detector) — MegaDetector on the pre-pipeline

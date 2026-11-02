@@ -4,11 +4,13 @@ one hoseflow webhook event per detection, where the alert rules live.
 Closes the latency gap between the fetch daemon (minutes after capture) and
 the 02:30 nightly analysis (hours). After each ingest batch the daemon runs
 the SAME incremental pipeline as the nightly — detect + classify under the
-standing run_id, serialized by a lock file so concurrent invocations (or the
+standing run_id, then a best-effort buck/doe score of new deer
+(stages/sex.py), serialized by a lock file so concurrent invocations (or the
 02:30 run) never fight over detections.db — then forwards just the new
 assets' detections.
 
-What stays here: detection, classification and the review-layer exclusion
+What stays here: detection, classification (plus the buck/doe guess from the
+monthly model's own threshold) and the review-layer exclusion
 zones (the trampoline never reaches anyone — the zones need tags.db geometry).
 Every other detection is forwarded unfiltered by species (invariant 4).
 
@@ -49,9 +51,14 @@ TAGS_DB = Path.home() / "trailcam/tags/tags.db"
 CROPS = Path.home() / "trailcam/derived/crops"
 ASSETS = Path.home() / "trailcam/landing/assets"
 PIPELINE_LOCK = Path.home() / "trailcam/derived/.pipeline.lock"
+SEX_CURRENT = Path.home() / "trailcam/derived/training/sex/current"
 LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
 WEBHOOK_FAIL_ALERT_AFTER = 3
+# The buck/doe step is best-effort: capped so a backlog (first run, or after
+# a retrain is rewound) can't hold the lock for long, newest crops first.
+SEX_STEP_LIMIT = 200
+SEX_STEP_TIMEOUT_S = 300
 
 # Loopback to hoseserv's self-signed cert; verify is off for loopback hosts
 # only (hoseid.hoseserv.verify_for), in common.post_to_hoseflow.
@@ -67,7 +74,9 @@ def _local_capture_time(capture_time_iso: str) -> datetime:
 
 def run_pipeline_incremental(timeout_s: int = 900) -> bool:
     """Detect + classify anything new in the landing zone, serialized against
-    the nightly run via flock. Returns False if the pipeline failed."""
+    the nightly run via flock, then score new deer buck/doe. Returns False if
+    detect or classify failed; the buck/doe step only logs (an alert without
+    a sex guess beats a missing alert or a false "alerts DOWN")."""
     PIPELINE_LOCK.parent.mkdir(parents=True, exist_ok=True)
     with open(PIPELINE_LOCK, "w") as lockf:
         fcntl.flock(lockf, fcntl.LOCK_EX)   # waits if nightly is mid-run
@@ -83,7 +92,57 @@ def run_pipeline_incremental(timeout_s: int = 900) -> bool:
             if r.returncode != 0:
                 log(f"alerts: pipeline step failed: {r.stderr.decode()[-300:]}")
                 return False
+        _run_sex_step()
     return True
+
+
+def _run_sex_step() -> None:
+    cmd = [str(REPO / ".venv-classifier/bin/python"), str(REPO / "stages/sex.py"),
+           "--run-id", "nightly", "--limit", str(SEX_STEP_LIMIT)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=SEX_STEP_TIMEOUT_S,
+                           cwd=str(REPO))
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"alerts: buck/doe step failed (alerts go out without it): "
+            f"{type(e).__name__}: {e}")
+        return
+    if r.returncode != 0:
+        log(f"alerts: buck/doe step failed (alerts go out without it): "
+            f"{r.stderr.decode()[-300:]}")
+
+
+_threshold_cache: dict = {}
+
+
+def buck_threshold() -> float | None:
+    """The current buck/doe model's threshold (metrics.json, recall-first),
+    re-read when `current` is repointed or rewritten; None without a model."""
+    try:
+        metrics = SEX_CURRENT.resolve() / "metrics.json"
+        key = (str(metrics), metrics.stat().st_mtime)
+    except OSError:
+        return None
+    if key not in _threshold_cache:
+        try:
+            thr = json.loads(metrics.read_text()).get("threshold")
+        except (OSError, ValueError):
+            thr = None
+        _threshold_cache.clear()
+        _threshold_cache[key] = float(thr) if thr is not None else None
+    return _threshold_cache[key]
+
+
+def capture_buck_prob(conn, asset_id: str, run_id: str) -> float | None:
+    """Capture score = max over its blacktail crops ("at least one buck",
+    as train_eval scores captures). None if unscored or the DB predates
+    migration 004."""
+    try:
+        row = conn.execute(
+            "SELECT MAX(buck_prob) FROM detections WHERE asset_id=? AND run_id=? "
+            "AND taxon='blacktail'", (asset_id, run_id)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row else None
 
 
 def _active_zones() -> list[dict]:
@@ -124,9 +183,18 @@ def _alert_image(det, digest) -> Path | None:
     return hits[0] if hits else None
 
 
-def build_event(det, cap, device_id: str | None, image: Path | None) -> dict:
-    """The webhook payload hoseflow rules match on and template from."""
+def build_event(det, cap, device_id: str | None, image: Path | None,
+                buck_prob: float | None = None, buck_threshold: float | None = None) -> dict:
+    """The webhook payload hoseflow rules match on and template from.
+
+    buck_prob is the capture's buck/doe score, buck_threshold the model's
+    own cut-off; only the resulting guess goes out. The raw score is not a
+    calibrated probability (the 2026-11 recall-first threshold is ~0.001),
+    so a percentage would mislead."""
     taxon = det["taxon"] or ""
+    sex_guess = ""
+    if taxon == "blacktail" and buck_prob is not None and buck_threshold is not None:
+        sex_guess = "buck" if buck_prob >= buck_threshold else "doe"
     conf = det["detector_confidence"]
     local = _local_capture_time(cap["capture_time"])
     label = taxon.replace("_", " ") if taxon else det["detector_class"]
@@ -148,6 +216,9 @@ def build_event(det, cap, device_id: str | None, image: Path | None) -> dict:
         "taxon_confidence": round(tconf, 4) if tconf is not None else None,
         "taxon_confidence_pct": f"{tconf:.0%}" if tconf is not None else "",
         "species_guess": raw[-1] if raw else "",
+        # "buck" / "doe" for a scored blacktail capture (at least one buck
+        # crop), "" for other taxa or with no model
+        "sex_guess": sex_guess,
         # share of the frame the box covers, 0-1: big = near or large animal
         "box_area": round(det["bbox_w"] * det["bbox_h"], 4),
         "capture_time": cap["capture_time"],
@@ -214,13 +285,15 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
             continue
         digest = asset_id.split(":", 1)[1]
         device = _device_for(digest)
+        buck_prob = capture_buck_prob(conn, asset_id, cap["run_id"])
+        thr = buck_threshold() if buck_prob is not None else None
 
         for det in conn.execute(
                 "SELECT * FROM detections WHERE asset_id=? AND run_id=?",
                 (asset_id, cap["run_id"])):
             if _in_zone(det, device, zones):
                 continue
-            event = build_event(det, cap, device, _alert_image(det, digest))
+            event = build_event(det, cap, device, _alert_image(det, digest), buck_prob, thr)
             response = _post_event(cfg, event)
             if response is None:
                 failed.append(event)

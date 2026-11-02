@@ -29,7 +29,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from training.sex.common import OUT  # noqa: E402
+from training.sex.common import OUT, make_head  # noqa: E402
 
 TARGET_RECALL = 0.90
 FOLDS = 5
@@ -57,13 +57,6 @@ def load(fset: tuple):
 
 def fset_name(fset: tuple) -> str:
     return ("dino:" if "dino" in fset[0] else "speciesnet:") + "+".join(fset[1])
-
-
-def make_head(kind: str, d: int) -> torch.nn.Module:
-    if kind == "logistic":
-        return torch.nn.Linear(d, 1)
-    return torch.nn.Sequential(torch.nn.Linear(d, 256), torch.nn.ReLU(),
-                               torch.nn.Dropout(0.3), torch.nn.Linear(256, 1))
 
 
 class Model:

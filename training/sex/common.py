@@ -21,6 +21,11 @@ LEGACY_CROPS = OUT / "legacy_crops"
 
 DEER_TAXA = {"blacktail"}
 
+# Backbone the heads are trained on (embed_dino.py) and scored with
+# (stages/sex.py): the two must build features identically.
+DINO_MODEL = "dinov2_vitb14"
+DINO_SIZE = 448  # multiple of the 14 px patch
+
 
 def ro(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -47,3 +52,34 @@ def legacy_file(asset_id: str) -> Path | None:
     name = asset_id.split(":", 1)[1]
     hits = sorted(ASSETS.glob(f"*/reveal-images*/{name}"))
     return hits[0] if hits else None
+
+
+def dino_features(model, imgs, dev: str, size: int = DINO_SIZE):
+    """(CLS token, mean patch token) as numpy arrays for a list of RGB PIL
+    images: resized to size x size bicubic, ImageNet-normalized. torch, numpy
+    and PIL are imported here so label-only callers don't need them."""
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+    x = torch.stack([torch.from_numpy(np.asarray(im.resize((size, size), Image.BICUBIC),
+                                                 dtype=np.float32) / 255).permute(2, 0, 1)
+                     for im in imgs])
+    x = ((x - mean) / std).to(dev)
+    with torch.no_grad():
+        out = model.forward_features(x)
+    return (out["x_norm_clstoken"].cpu().numpy(),
+            out["x_norm_patchtokens"].mean(1).cpu().numpy())
+
+
+def make_head(kind: str, d: int):
+    """The buck/doe head on standardized features (trained in train_eval.py,
+    rebuilt from its state_dict by stages/sex.py)."""
+    import torch
+
+    if kind == "logistic":
+        return torch.nn.Linear(d, 1)
+    return torch.nn.Sequential(torch.nn.Linear(d, 256), torch.nn.ReLU(),
+                               torch.nn.Dropout(0.3), torch.nn.Linear(256, 1))
