@@ -1,8 +1,8 @@
 # hoseID — notes for coding agents
 
 ## Testing app.py (the review API)
-- app.py's data paths are HARDCODED module constants (app.py:45-49:
-  ASSETS, SIDECARS, DETECTIONS_DB, DB_PATH, MOVE_FLAGS). They do NOT read
+- app.py's data paths are HARDCODED module constants (app.py:46-51:
+  ASSETS, SIDECARS, DETECTIONS_DB, DB_PATH, MOVE_FLAGS, WILDLIFE_DB). They do NOT read
   HOSEID_ROOT. Do NOT refactor them through src/hoseid/paths.py to make a
   test possible — that is a production change nobody asked for.
 - The right pattern: `import app`, then monkeypatch the constants
@@ -13,7 +13,11 @@
 - HOSEID_ROOT redirection works only for code that goes through
   src/hoseid/paths.py (the pipeline stages, tests/test_video.py pattern).
 - Seed schemas by applying migrations/detections/*.sql to the tmp DB.
-- Run tests with `.venv/bin/pytest -q` from the repo root.
+- Run tests with `~/venvs/megadetector/bin/python -m pytest -q -rs` from the
+  repo root (the review app's venv; `-rs` shows skips). The wildlife MCP tests
+  need the repo `.venv` (it has `mcp`): `.venv/bin/python -m pytest -q
+  tests/test_mcp_wildlife.py`. `.venv` alone cannot run the suite (no
+  fastapi, numpy or requests; `fetchers` imports fail).
 
 ## Frontend (static/index.html)
 - There is NO JS test harness in this repo and none should be built for a
@@ -23,10 +27,21 @@
   apply here (that is a hoseserv convention).
 
 ## Running / restarting
-- Service: launchd (`com.hoseid.review`, plist in config/), review app on port 8870. Templates/static are read
-  from disk — a browser reload picks up HTML/JS edits, no restart.
-- app.py changes need the 8870 process restarted; it runs under launchd —
-  tell the operator rather than restarting it yourself.
+- Service: LaunchDaemon `com.hoseid.review` (the installed plist in
+  /Library/LaunchDaemons runs as hosebot from `~/venvs/megadetector`), review
+  app on port 8870, log `~/logs/hoseid-review.log`. The config/*.plist files
+  are templates without `UserName`: never install one verbatim (it would run
+  as root). Templates/static are read from disk — a browser reload picks up
+  HTML/JS edits, no restart.
+- app.py changes need the 8870 process restarted — tell the operator rather
+  than restarting it yourself (they run
+  `sudo launchctl kickstart -k system/com.hoseid.review`).
+- Wildlife MCP (`src/hoseid/mcp_wildlife/`): LaunchDaemon
+  `com.hoseid.wildlife-mcp`, `.venv/bin/python`, port 8853 (plain http,
+  `WILDLIFE_MCP_TLS=0`), `GET /health` returns `{"ok": true}` (hoseserv's
+  Stack panel probes it). Log `~/logs/hoseid-wildlife-mcp.log`. Restart:
+  `sudo launchctl kickstart -k system/com.hoseid.wildlife-mcp`.
+- Nightly pipeline: LaunchDaemon `com.hoseid.nightly` (scripts/nightly.sh).
 - The Reveal archive is immutable; never write under the archive roots.
   Live data: ~/trailcam/landing (assets/sidecars), ~/trailcam/derived
   (detections.db), ~/trailcam/tags (tags.db).
@@ -55,7 +70,7 @@
   fetch-state.json); those keys are a contract with the `fetch-*` rules in
   hoseserv docs/ALERTS.md. Unless hoseflow reports a notification sent, it
   falls back to `notify()` (ntfy).
-- After editing it, restart the fetch daemon:
+- After editing it, restart the fetch daemon (it runs from `.venv-fetch`):
   `sudo launchctl kickstart -k system/com.hoseid.fetch`.
 
 ## Buck/doe model (training/sex/, see its README)
