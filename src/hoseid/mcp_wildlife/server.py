@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse
 
 from hoseid.mcp_wildlife import media as _media
 from hoseid.mcp_wildlife import queries as _q
+from hoseid.site import TZ as SITE_TZ
 
 DEFAULT_HOST = os.environ.get("WILDLIFE_MCP_HOST", "0.0.0.0")
 DEFAULT_PORT = int(os.environ.get("WILDLIFE_MCP_PORT", "8853"))
@@ -48,7 +49,7 @@ INSTRUCTIONS = (
     "explicit limit. Every count names its unit: 'sightings' are log rows (one "
     "per species per reviewed capture), 'captures' are distinct camera files, "
     "'encounters' are derived visit chains; the ratios are reported, not "
-    "inferable. Times are local (America/Los_Angeles). time_of_day buckets: "
+    f"inferable. Times are local ({SITE_TZ.key}). time_of_day buckets: "
     "night 22-04, morning 05-11, midday 12-16, evening 17-21. 'light' "
     "(daylight | civil_twilight | dark) and legal_light (sunrise-30min to "
     "sunset+30min) are computed per date from sunrise/sunset at the property, "

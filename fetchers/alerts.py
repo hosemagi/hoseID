@@ -35,7 +35,6 @@ import fcntl
 import json
 import sqlite3
 import subprocess
-import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,6 +43,7 @@ import urllib3
 
 from .common import (DEFAULT_WEBHOOK, State, hoseflow_results, log, notify,
                      notifications_sent, post_to_hoseflow)
+from hoseid.site import TZ as LOCAL_TZ  # noqa: E402 (sys.path set by .common)
 
 REPO = Path(__file__).resolve().parents[1]
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
@@ -52,7 +52,6 @@ CROPS = Path.home() / "trailcam/derived/crops"
 ASSETS = Path.home() / "trailcam/landing/assets"
 PIPELINE_LOCK = Path.home() / "trailcam/derived/.pipeline.lock"
 SEX_CURRENT = Path.home() / "trailcam/derived/training/sex/current"
-LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
 WEBHOOK_FAIL_ALERT_AFTER = 3
 # The buck/doe step is best-effort: capped so a backlog (first run, or after

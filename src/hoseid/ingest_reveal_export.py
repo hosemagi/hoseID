@@ -38,15 +38,13 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from . import landing, paths, stations
+from .site import TZ as PROPERTY_TZ
 from .sidecar import (
     CaptureTimeSource, Conditions, MediaType, ResolutionClass, Sidecar, StationSource,
     TriggerType, compute_asset_id,
 )
-
-PROPERTY_TZ = ZoneInfo("America/Los_Angeles")
 
 # Anchored on the serial and the timestamp; the two counters between them are vendor-internal and
 # deliberately unmodelled. Suffix is matched case-insensitively but the extension is kept as-is.

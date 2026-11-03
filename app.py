@@ -34,6 +34,7 @@ Exclusion zones are the ONE lossy layer in the pipeline, so they carry guards:
 import json
 import sqlite3
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -42,6 +43,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# this repo's src: the megadetector venv has no hoseid install
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from hoseid.site import TZ as _LOCAL_TZ  # noqa: E402
 
 ASSETS = Path("/Users/hosebot/trailcam/landing/assets")
 SIDECARS = Path("/Users/hosebot/trailcam/landing/sidecars")
@@ -169,7 +174,6 @@ def init_db():
 # Read live from detections.db, cached on its mtime, so new nightly output
 # appears in the review queue without an app restart.
 _CAT_CODE = {"animal": "1", "person": "2", "vehicle": "3"}
-_LOCAL_TZ = __import__("zoneinfo").ZoneInfo("America/Los_Angeles")
 _pipeline_cache = {"mtime": None, "items": {}}
 
 

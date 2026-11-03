@@ -16,18 +16,17 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-import zoneinfo
 from datetime import datetime, timezone
 from pathlib import Path
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from hoseid import station_renames  # noqa: E402
+from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 TAGS_DB = Path.home() / "trailcam/tags/tags.db"
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
-LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
 
 # sex for a new sighting whose review set none. Deer default to doe: bucks

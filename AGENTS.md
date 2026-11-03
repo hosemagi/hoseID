@@ -93,6 +93,10 @@
   are kept, plus `current`. Monthly LaunchDaemon `com.hoseid.sex-retrain`.
 
 ## Gotchas
+- Local time is `hoseid.site.TZ` (SITE_TZ, default America/Los_Angeles, the
+  same rule as hoseserv). Never define a ZoneInfo per file. It is read at
+  import; no plist sets SITE_TZ today, so if the zone ever changes add it to
+  each service's EnvironmentVariables and restart them.
 - pipeline cache in app.py is keyed by file mtime; reset it directly in
   tests rather than touching files.
 - detect.py keeps ONE best frame per video clip; all detections of a

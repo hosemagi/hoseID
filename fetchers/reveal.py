@@ -7,7 +7,7 @@ via the RefreshToken, falling back to a full login.
 
 Capture time: photoTimestamp is camera-local wall-clock (matches the burned-in
 banner), MMDDYYYYHHMMSS, with no zone marker — interpreted as the property's
-zone (America/Los_Angeles). Trusted (vendor_api) but flagged medium rather
+zone (SITE_TZ, hoseid.site). Trusted (vendor_api) but flagged medium rather
 than high confidence purely because of the implicit zone.
 """
 from __future__ import annotations
@@ -17,20 +17,19 @@ import os
 import tempfile
 import time
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import requests
 
 from .common import TMP_DIR, State, download, ingest, log, now_utc
 from hoseid import paths  # noqa: E402 (sys.path set by .common)
 from hoseid.landing import ImmutabilityError  # noqa: E402
+from hoseid.site import TZ as PROPERTY_TZ  # noqa: E402
 from hoseid.station_renames import normalize_station  # noqa: E402
 
 COGNITO = "https://cognito-idp.us-east-1.amazonaws.com/"
 CLIENT_ID = "6r9tpojvgvkci5trla0ip14mon"
 API = "https://api.reveal.ishareit.net/v1"
 UA = "RevealWeb/5.4.0"
-PROPERTY_TZ = ZoneInfo("America/Los_Angeles")
 HISTORY_DAYS = 180        # station_health_history.jsonl keeps this many days
 PAGE_SIZE = 100
 

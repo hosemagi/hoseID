@@ -18,11 +18,10 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
-from zoneinfo import ZoneInfo
 
 from hoseid import paths
+from hoseid.site import TZ as LOCAL_TZ
 
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 FALLBACK_LAT, FALLBACK_LON = 39.32097, -120.97152   # Storm Oak, landing/stations.json
 ZENITH_OFFICIAL = 90.833   # sunrise/sunset, refraction + solar radius
 ZENITH_CIVIL = 96.0        # civil dawn/dusk

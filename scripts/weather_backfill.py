@@ -22,9 +22,13 @@ from pathlib import Path
 
 import urllib.request
 
+# this repo's src first: the venv's editable install may point at another checkout
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from hoseid.site import TZ as SITE_TZ  # noqa: E402
+
 DB = Path.home() / "trailcam/tags/wildlife.db"
 LAT, LON = 39.3212, -120.9713
-TZ = "America/Los_Angeles"
+TZ = SITE_TZ.key   # Open-Meteo wants the IANA name
 WEATHER_URL = (
     "https://api.open-meteo.com/v1/forecast"
     f"?latitude={LAT}&longitude={LON}&timezone={TZ}&past_days=92&forecast_days=1"

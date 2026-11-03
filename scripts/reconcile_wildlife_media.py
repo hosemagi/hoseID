@@ -23,11 +23,14 @@ import zoneinfo
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# this repo's src first: the venv's editable install may point at another checkout
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
+
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 TAGS_DB = Path.home() / "trailcam/tags/tags.db"
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
 ASSETS = Path.home() / "trailcam/landing/assets"
-LOCAL_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 TOLERANCE_MIN = 3
 MAX_REFS = 8   # a long stay matches many frames; keep the arrival cluster
 
