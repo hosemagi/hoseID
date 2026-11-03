@@ -508,3 +508,38 @@ def test_health_route_answers_without_an_mcp_session():
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"ok": True}
+
+
+def test_get_mcp_is_405_not_an_idle_sse_stream():
+    """Stateless JSON mode has nothing to stream, so GET /mcp is refused
+    (spec-allowed; the SDK client carries on) instead of held open."""
+    from starlette.testclient import TestClient
+
+    from hoseid.mcp_wildlife.server import build_starlette_app
+    client = TestClient(build_starlette_app(host="127.0.0.1", port=8853))
+    r = client.get("/mcp", headers={"Accept": "text/event-stream"})
+    assert r.status_code == 405
+    assert "POST" in r.headers["allow"]
+    assert client.get("/health").json() == {"ok": True}
+
+
+def test_post_initialize_and_tools_list_still_work(root):
+    from starlette.testclient import TestClient
+
+    from hoseid.mcp_wildlife.server import build_starlette_app
+    headers = {"Accept": "application/json, text/event-stream",
+               "Content-Type": "application/json"}
+    # host=127.0.0.1 turns on the SDK's DNS-rebinding check, so send a matching Host.
+    with TestClient(build_starlette_app(host="127.0.0.1", port=8853),
+                    base_url="http://127.0.0.1:8853") as client:
+        r = client.post("/mcp", headers=headers, json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-03-26", "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0"}}})
+        assert r.status_code == 200
+        assert r.json()["result"]["serverInfo"]["name"] == "wildlife"
+        r = client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        assert r.status_code == 200
+        names = {t["name"] for t in r.json()["result"]["tools"]}
+        assert "query_sightings" in names

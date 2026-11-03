@@ -402,6 +402,35 @@ def create_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastMCP
     return mcp
 
 
+class _NoSseGuard:
+    """Answer GET on the MCP path with 405 instead of opening an SSE stream.
+
+    Stateless JSON mode never sends anything on that stream, yet each client
+    held one open until shutdown tore them all down ("ASGI callable returned
+    without completing response"). The spec lets a server without a stream
+    return 405; the SDK client treats that as non-fatal. Everything else,
+    lifespan included, passes straight through.
+    """
+
+    def __init__(self, app, path: str):
+        self.app = app
+        self.path = path
+
+    async def __call__(self, scope, receive, send):
+        if (scope["type"] == "http" and scope["method"] == "GET"
+                and scope["path"].rstrip("/") == self.path.rstrip("/")):
+            body = b"No SSE stream: this server answers POST with JSON.\n"
+            await send({"type": "http.response.start", "status": 405, "headers": [
+                (b"allow", b"POST, DELETE"),
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"content-length", str(len(body)).encode()),
+            ]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
 def build_starlette_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
     """ASGI app for uvicorn. No auth - ZeroTier/LAN is the perimeter, same as sage-mcp."""
-    return create_server(host=host, port=port).streamable_http_app()
+    mcp = create_server(host=host, port=port)
+    return _NoSseGuard(mcp.streamable_http_app(), mcp.settings.streamable_http_path)
