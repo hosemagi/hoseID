@@ -64,7 +64,6 @@ def webhook(monkeypatch):
 def ntfy(monkeypatch):
     sent = []
     monkeypatch.setattr(common, "notify", lambda cfg, msg, title="": sent.append(msg))
-    monkeypatch.setattr(daemon, "notify", lambda cfg, msg: sent.append(msg))
     monkeypatch.setattr(common, "log", lambda msg: None)
     monkeypatch.setattr(daemon, "log", lambda msg: None)
     return sent
@@ -135,6 +134,29 @@ def test_dead_hoseflow_falls_back_to_ntfy(webhook, ntfy, tmp_path, mode):
                     "hoseid-fetch: reveal recovered"]
     assert _verdicts(webhook) == ["BROKEN", "HEALTHY"]
     assert state.get("fetch_health_reveal") == "HEALTHY"
+
+
+def _freeze(state):
+    from fetchers.arlo import LibraryFrozenError
+
+    def sweep():
+        raise LibraryFrozenError("media library appears frozen")
+    with pytest.raises(SystemExit):
+        daemon.run_source("arlo", sweep, cfg=CFG, state=state,
+                          failures={"arlo": 0}, login_at=time.time(),
+                          once=False, stop=lambda: None)
+
+
+def test_repeat_freeze_restart_page_goes_through_hoseflow(webhook, ntfy, tmp_path):
+    path = tmp_path / "s.json"
+    _freeze(State(path))
+    assert webhook.calls == [] and ntfy == []
+    _freeze(State(path))          # launchd restart, frozen again at once
+    assert _verdicts(webhook) == ["BROKEN"]
+    assert webhook.calls[0]["json"]["source"] == "arlo"
+    assert webhook.calls[0]["json"]["error"].startswith("LibraryFrozenError:")
+    assert ntfy == []
+    assert State(path).get("fetch_health_arlo") == "BROKEN"
 
 
 def test_missing_config_goes_straight_to_ntfy(webhook, ntfy, tmp_path):

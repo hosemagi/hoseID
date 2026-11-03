@@ -11,9 +11,10 @@ Run:  .venv-fetch/bin/python -m fetchers.daemon [--once] [--backfill-hours N]
 Loop shape: Reveal polls on a fixed interval (no push channel exists; the
 cameras batch-transmit anyway). Arlo sweeps when the event stream reports
 media activity — debounced — and on a slow fixed interval as a catch-all.
-A source failing never stops the other; repeated failures alert via notify(),
-and past FAILURE_RESTART_THRESHOLD the daemon exits non-zero so launchd's
-KeepAlive brings up a fresh process. Restart is the only known cure for the
+A source failing never stops the other; repeated failures alert through
+hoseflow (report_health, ntfy as fallback), and past
+FAILURE_RESTART_THRESHOLD the daemon exits non-zero so launchd's KeepAlive
+brings up a fresh process. Restart is the only known cure for the
 pyaarlo media-library freeze (see fetchers/arlo.py _assert_library_fresh):
 the library stopped refreshing twice in Aug 2026 and both times the daemon
 sat logging the same error for days -- 393 times the second time -- because
@@ -35,7 +36,7 @@ from fetchers import alerts  # noqa: E402
 from fetchers import reveal as reveal_mod  # noqa: E402
 from fetchers.arlo import (ArloFetcher, LibraryFrozenError,  # noqa: E402
                            SessionDeadError)
-from fetchers.common import (State, load_config, log, notify,  # noqa: E402
+from fetchers.common import (State, load_config, log,  # noqa: E402
                              report_health)
 
 FAILURE_ALERT_THRESHOLD = 5
@@ -59,10 +60,19 @@ SESSION_EXPIRY_EXPECTED_AFTER_S = 60 * 60
 # hoseid-fetch.log were exactly that. The first such failure in a row logs a
 # plain line; a second in a row is no longer a hiccup and logs ERROR.
 TRANSIENT_HTTP_STATUSES = frozenset({502, 503, 504})
+# A frozen Arlo media library (LibraryFrozenError) is cured by the restart:
+# about 20 such restarts since September 2026 each reconnected within ~10 s,
+# and each one paged. The first freeze is routine; a second freeze within
+# this window of the last frozen-library restart means the restart did not
+# help, and that one pages. The restart time is kept in State under
+# FROZEN_RESTART_KEY (epoch seconds) because the process is gone by then.
+FROZEN_REPEAT_WINDOW_S = 60 * 60
+FROZEN_RESTART_KEY = "arlo_frozen_restart_at"
 
 
-def classify_failure(exc: Exception, failures: int,
-                     session_age: float) -> tuple[bool, bool, bool]:
+def classify_failure(exc: Exception, failures: int, session_age: float,
+                     last_frozen_restart: float | None = None,
+                     now: float | None = None) -> tuple[bool, bool, bool]:
     """(restart, alert, routine) for one failed run of a source.
 
     A frozen library or expired REST session never recovers without a
@@ -70,12 +80,20 @@ def classify_failure(exc: Exception, failures: int,
     (5.5h on 2026-08-25, 2 days on 2026-08-30): restart on first detection.
     A SessionDeadError past the expected session lifetime is routine -- no
     alert, and no ERROR in the log (hoseserv's Stack panel and the improver
-    treat a newest line containing ERROR as broken). The separate "failing
-    repeatedly" report_health at FAILURE_ALERT_THRESHOLD is not part of this."""
+    treat a newest line containing ERROR as broken). A LibraryFrozenError is
+    routine too unless the last frozen-library restart (`last_frozen_restart`,
+    epoch seconds) was within FROZEN_REPEAT_WINDOW_S of `now`. The separate
+    "failing repeatedly" report_health at FAILURE_ALERT_THRESHOLD is not part
+    of this."""
     restart = (isinstance(exc, (LibraryFrozenError, SessionDeadError))
                or failures >= FAILURE_RESTART_THRESHOLD)
-    routine = (isinstance(exc, SessionDeadError)
-               and session_age >= SESSION_EXPIRY_EXPECTED_AFTER_S)
+    if isinstance(exc, LibraryFrozenError):
+        now = time.time() if now is None else now
+        routine = (last_frozen_restart is None
+                   or now - last_frozen_restart > FROZEN_REPEAT_WINDOW_S)
+    else:
+        routine = (isinstance(exc, SessionDeadError)
+                   and session_age >= SESSION_EXPIRY_EXPECTED_AFTER_S)
     return restart, restart and not routine, routine
 
 
@@ -98,7 +116,8 @@ def run_source(name: str, fn, *, cfg: dict, state: State,
                stop) -> list[str]:
     """Run one source pass; on failure log, alert and maybe exit for a
     launchd restart. `stop` shuts down the Arlo fetcher before exiting.
-    BROKEN/HEALTHY transitions go to hoseflow via report_health()."""
+    BROKEN/HEALTHY transitions go to hoseflow via report_health(), and so
+    does the restart page (ntfy is its fallback)."""
     try:
         new = fn() or []
         report_health(cfg, state, name, True, failures[name], None, "")
@@ -106,15 +125,22 @@ def run_source(name: str, fn, *, cfg: dict, state: State,
         return new
     except Exception as e:
         failures[name] += 1
-        session_age = time.time() - login_at
+        now = time.time()
+        session_age = now - login_at
+        frozen = isinstance(e, LibraryFrozenError)
+        last_frozen = (state.get(FROZEN_RESTART_KEY)
+                       if frozen and state is not None else None)
         restart, alert, routine = classify_failure(e, failures[name],
-                                                   session_age)
+                                                   session_age, last_frozen,
+                                                   now)
         if once:
             # --once never restarts or retries, so a dead session or a Reveal
             # hiccup there is unexpected and logs as an ERROR like any other
             # failure.
             restart = alert = routine = False
-        if routine:
+        if routine and frozen:
+            log(f"{name}: media library frozen (routine); restarting")
+        elif routine:
             log(f"{name}: session expired after {session_age / 60:.0f} min "
                 "(routine); restarting")
         elif not once and is_transient_reveal(e, name, failures[name]):
@@ -127,11 +153,14 @@ def run_source(name: str, fn, *, cfg: dict, state: State,
                           f"{type(e).__name__}: {e}",
                           f"hoseid-fetch: {name} failing repeatedly: {e}")
         if restart:
+            if frozen and state is not None:
+                state.set(FROZEN_RESTART_KEY, now)
             if alert:
                 msg = (f"hoseid-fetch: {name} failed {failures[name]}x in a "
                        f"row; exiting for a launchd restart. Last: {e}")
                 log(msg)
-                notify(cfg, msg)
+                report_health(cfg, state, name, False, failures[name],
+                              f"{type(e).__name__}: {e}", msg)
             try:
                 stop()
             except Exception:

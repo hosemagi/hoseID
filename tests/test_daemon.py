@@ -1,7 +1,8 @@
 """fetchers.daemon: a routine Arlo session expiry restarts quietly (no ERROR
-line, no page), and so does the first Reveal hiccup in a row (logs a plain
-line); early session death, a frozen library, repeated failures and threshold
-restarts still log ERROR and notify."""
+line, no page), and so does the first frozen-library restart within an hour;
+the first Reveal hiccup in a row logs a plain line. Early session death, a
+library frozen again within an hour of its restart, repeated failures and
+threshold restarts still log ERROR and page (via report_health)."""
 import importlib.util
 import sys
 import time
@@ -38,31 +39,72 @@ MIN = 60
     # (restart, alert, routine)
     (Exception("504"), 1, 10 * MIN, (False, False, False)),
     (Exception("504"), 8, 10 * MIN, (True, True, False)),
-    (LibraryFrozenError("stale"), 1, 120 * MIN, (True, True, False)),
     (SessionDeadError("401"), 1, 59 * MIN, (True, True, False)),
     (SessionDeadError("401"), 1, 60 * MIN, (True, False, True)),
     (SessionDeadError("401"), 1, 61 * MIN, (True, False, True)),
-], ids=["transient", "threshold", "frozen", "session-early", "session-boundary",
+], ids=["transient", "threshold", "session-early", "session-boundary",
         "session-routine"])
 def test_classify_failure(exc, failures, age, expected):
     assert daemon.classify_failure(exc, failures, age) == expected
+
+
+NOW = 1_800_000_000.0
+
+
+@pytest.mark.parametrize("last_restart, expected", [
+    # (restart, alert, routine)
+    (None, (True, False, True)),
+    (NOW - 10 * MIN, (True, True, False)),
+    (NOW - 60 * MIN, (True, True, False)),
+    (NOW - 61 * MIN, (True, False, True)),
+], ids=["first-freeze", "again-within-1h", "again-at-1h", "again-after-1h"])
+def test_classify_failure_frozen(last_restart, expected):
+    exc = LibraryFrozenError("stale")
+    assert daemon.classify_failure(exc, 1, 120 * MIN, last_restart,
+                                   NOW) == expected
+
+
+def test_classify_failure_frozen_defaults_now_to_the_clock():
+    exc = LibraryFrozenError("stale")
+    assert daemon.classify_failure(exc, 1, 0, time.time() - 5 * MIN) \
+        == (True, True, False)
+
+
+def test_frozen_restart_time_does_not_affect_other_errors():
+    assert daemon.classify_failure(SessionDeadError("401"), 1, 112 * MIN,
+                                   NOW - MIN, NOW) == (True, False, True)
+
+
+class FakeState:
+    def __init__(self, data=None):
+        self.data = dict(data or {})
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
 
 
 @pytest.fixture
 def captured(monkeypatch):
     lines, notes = [], []
     monkeypatch.setattr(daemon, "log", lines.append)
-    monkeypatch.setattr(daemon, "notify", lambda cfg, msg: notes.append(msg))
-    # The "failing repeatedly" page now goes through report_health; record
-    # its fallback message as hoseflow-down would (tests/test_fetch_health.py
-    # covers the hoseflow path).
-    monkeypatch.setattr(daemon, "report_health",
-                        lambda cfg, state, name, ok, failures, error, msg:
-                        None if ok else notes.append(msg))
+    # Every page (the "failing repeatedly" one and the restart one) goes
+    # through report_health; record its fallback message as hoseflow-down
+    # would, once per BROKEN transition per source like the real one
+    # (tests/test_fetch_health.py covers the hoseflow path).
+    verdicts = {}
+
+    def report_health(cfg, state, name, ok, failures, error, msg):
+        if verdicts.get(name, True) != ok and not ok:
+            notes.append(msg)
+        verdicts[name] = ok
+    monkeypatch.setattr(daemon, "report_health", report_health)
     return lines, notes
 
 
-def _run(session_age, *, once=False, exc=None, stopped=None):
+def _run(session_age, *, once=False, exc=None, stopped=None, state=None):
     stopped = [] if stopped is None else stopped
 
     def sweep():
@@ -70,7 +112,7 @@ def _run(session_age, *, once=False, exc=None, stopped=None):
 
     failures = {"reveal": 0, "arlo": 0}
     result = daemon.run_source(
-        "arlo", sweep, cfg={}, state=None, failures=failures,
+        "arlo", sweep, cfg={}, state=state, failures=failures,
         login_at=time.time() - session_age, once=once,
         stop=lambda: stopped.append(True))
     return result, failures, stopped
@@ -95,6 +137,65 @@ def test_early_session_death_still_errors_and_notifies(captured):
     assert exit_.value.code == daemon.EXIT_RESTART
     assert any("ERROR" in line for line in lines)
     assert len(notes) == 1 and "exiting for a launchd restart" in notes[0]
+
+
+FROZEN = LibraryFrozenError("media library appears frozen: 'Madrone' newest "
+                            "recording is 3h behind its last media event")
+
+
+def test_first_frozen_library_restarts_without_error_or_page(captured):
+    lines, notes = captured
+    state, stopped = FakeState(), []
+    before = time.time()
+    with pytest.raises(SystemExit) as exit_:
+        _run(30 * MIN, exc=FROZEN, stopped=stopped, state=state)
+    assert exit_.value.code == daemon.EXIT_RESTART
+    assert stopped == [True]
+    assert lines == ["arlo: media library frozen (routine); restarting"]
+    assert notes == []
+    assert before <= state.get(daemon.FROZEN_RESTART_KEY) <= time.time()
+
+
+def test_frozen_library_without_state_is_routine(captured):
+    lines, notes = captured
+    with pytest.raises(SystemExit):
+        _run(30 * MIN, exc=FROZEN)
+    assert lines == ["arlo: media library frozen (routine); restarting"]
+    assert notes == []
+
+
+def test_library_frozen_again_within_an_hour_pages(captured):
+    lines, notes = captured
+    earlier = time.time() - 20 * MIN
+    state = FakeState({daemon.FROZEN_RESTART_KEY: earlier})
+    with pytest.raises(SystemExit) as exit_:
+        _run(1 * MIN, exc=FROZEN, state=state)
+    assert exit_.value.code == daemon.EXIT_RESTART
+    assert lines[0].startswith("arlo: ERROR (1 consecutive): LibraryFrozenError")
+    assert len(notes) == 1 and "exiting for a launchd restart" in notes[0]
+    assert lines[-1] == notes[0]
+    assert state.get(daemon.FROZEN_RESTART_KEY) > earlier
+
+
+def test_library_frozen_again_after_an_hour_is_routine(captured):
+    lines, notes = captured
+    earlier = time.time() - 3 * 60 * MIN
+    state = FakeState({daemon.FROZEN_RESTART_KEY: earlier})
+    with pytest.raises(SystemExit):
+        _run(1 * MIN, exc=FROZEN, state=state)
+    assert lines == ["arlo: media library frozen (routine); restarting"]
+    assert notes == []
+    assert state.get(daemon.FROZEN_RESTART_KEY) > earlier
+
+
+def test_frozen_library_during_once_errors_without_storing(captured):
+    lines, notes = captured
+    state = FakeState()
+    result, failures, stopped = _run(30 * MIN, once=True, exc=FROZEN,
+                                     state=state)
+    assert result == [] and failures["arlo"] == 1 and stopped == []
+    assert any("ERROR" in line for line in lines)
+    assert notes == [] and state.data == {}
 
 
 def test_session_death_during_once_is_an_error_without_restart(captured):
@@ -219,5 +320,8 @@ def test_reveal_504_streak_still_notifies_at_5_and_restarts_at_8(captured):
         _reveal(_http_error(504), failures)
     assert exit_.value.code == daemon.EXIT_RESTART
     assert failures["reveal"] == daemon.FAILURE_RESTART_THRESHOLD
-    assert len(notes) == 2 and "exiting for a launchd restart" in notes[1]
+    # The source is already BROKEN from the page at 5, so the restart page
+    # goes through report_health without a second notification; it is logged.
+    assert len(notes) == 1
+    assert "exiting for a launchd restart" in lines[-1]
     assert sum("transient" in line for line in lines) == 1
