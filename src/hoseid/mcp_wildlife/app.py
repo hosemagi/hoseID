@@ -29,12 +29,67 @@ import asyncio
 import logging
 import os
 import sys
+import time
 
 import uvicorn
 
 from hoseid.mcp_wildlife.server import DEFAULT_HOST, DEFAULT_PORT, build_starlette_app
 
 log = logging.getLogger(__name__)
+
+# The stack panel probes GET /health every few seconds and uvicorn logs every
+# one at INFO, so the log was mostly probe lines. _QuietHealth drops only the
+# successful health poll; failures and every other path are kept. Installed at
+# module import: build_servers() builds uvicorn.Config objects directly and
+# there is no launch hook to reach, so a fresh Config's logging config (which
+# leaves filters on uvicorn.access untouched) must see the filter already
+# present. It is idempotent, so importing twice does not stack filters.
+HEALTH_PATH = "/health"
+
+
+class _QuietHealth(logging.Filter):
+    """Drop uvicorn access lines for successful health polls, keeping only the
+    time of the newest one (O(1), in `last_ok`). The first success after start
+    or after a failure is kept, so the log shows when health came back. The
+    first failure after a run of successes is preceded by a uvicorn.error line
+    naming the last successful probe. Failures and every other path are kept.
+    uvicorn's record.args are (client, method, path, http_version, status)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_ok: float | None = None  # record.created of the newest 2xx probe
+        self.failing = True  # until the first success, and after each failure
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not (isinstance(args, tuple) and len(args) == 5):
+            return True
+        path, status = args[2], args[4]
+        if str(path).split("?", 1)[0] != HEALTH_PATH:
+            return True
+        if isinstance(status, int) and 200 <= status < 300:
+            keep = self.failing
+            self.failing = False
+            self.last_ok = record.created
+            return keep
+        if not self.failing and self.last_ok is not None:
+            logging.getLogger("uvicorn.error").warning(
+                "%s probe failed (status %s); last successful probe at %s",
+                HEALTH_PATH, status,
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_ok)),
+            )
+        self.failing = True
+        return True
+
+
+def _install_access_filter() -> None:
+    """Attach _QuietHealth to uvicorn.access once. Idempotent."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(type(f).__name__ == _QuietHealth.__name__ for f in access.filters):
+        access.addFilter(_QuietHealth())
+
+
+_install_access_filter()
 
 
 def _truthy(v: str | None, default: bool) -> bool:
