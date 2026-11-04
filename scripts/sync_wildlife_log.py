@@ -21,7 +21,7 @@ from pathlib import Path
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from hoseid import station_renames  # noqa: E402
+from hoseid import station_renames, stations  # noqa: E402
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
@@ -51,22 +51,26 @@ CATEGORY = {
     "jackrabbit": "small_game", "squirrel": "small_game", "skunk": "small_game",
 }
 
-# P's device->station mapping (2026-08-16) for the legacy Reveal corpus,
-# whose reviews carry only a device id. Mirrors ~/trailcam/landing/stations.json.
-DEVICE_STATION = {
-    "016579006078088": "Storm Oak",
-    "016579006023894": "Lost Woods",   # was South Clearing until 2026-09-12
-    "016579006127489": "Bench",
-    "016579006157692": "North Oak",
-}
+# Serial -> station, from the registry (~/trailcam/landing/stations.json),
+# for the legacy Reveal corpus whose reviews carry only a device id.
+# stations.by_device() raises on a duplicate serial, and so does this one:
+# two stations claiming one camera is a registry error the sync aborts on
+# rather than silently writing a wrong station (docs/CAMERA_RENAMES.md).
+def device_station(serial: str | None, path=None) -> str | None:
+    if not serial:
+        return None
+    reg = stations.by_device(path)
+    return reg.get(serial).name if serial in reg else None
 
 
 def normalize_station(name: str, date: str | None = None) -> str:
-    """Camera / legacy device id -> log station name. The rename rules
-    (detections.db captures written BEFORE a rename still carry the old
-    label) live in config/station_renames.json, shared with hoseserv's
-    security view; add a line there per rename (docs/CAMERA_RENAMES.md)."""
-    return station_renames.normalize_station(DEVICE_STATION.get(name, name), date)
+    """Camera / legacy device id -> log station name. Serials resolve through
+    the registry; a serial it does not know falls through unchanged. The
+    camera rename rules (detections.db captures written BEFORE a rename still
+    carry the old label) live in config/station_renames.json, shared with
+    hoseserv's security view; add a line there per rename
+    (docs/CAMERA_RENAMES.md)."""
+    return station_renames.normalize_station(device_station(name) or name, date)
 
 
 def individuals_for(individual: str | None, species: str,
@@ -151,16 +155,24 @@ def main() -> int:
                 "SELECT station, capture_time FROM captures WHERE asset_id=? "
                 "ORDER BY rowid DESC LIMIT 1", (asset_id,)).fetchone()
             if cap:
-                station = normalize_station(cap["station"], local_date(cap["capture_time"]))
+                station = normalize_station(cap["station"],
+                                            local_date(cap["capture_time"]))
                 t = datetime.fromisoformat(cap["capture_time"])
                 if t.tzinfo is None:
                     t = t.replace(tzinfo=timezone.utc)
                 local = t.astimezone(LOCAL_TZ)
                 date, time = local.strftime("%Y-%m-%d"), local.strftime("%H:%M")
+                if not station:
+                    # a capture with no station label (sighting 479): captures
+                    # has no serial column, but the review carries the
+                    # sidecar's device_id, so try the registry, else
+                    # "unknown" -- "" is invisible to every per-station view
+                    station = device_station(r["device_id"]) or "unknown"
         if station is None:
-            # legacy-corpus basename: station from the device mapping,
-            # time from the review's captured_at (filename-derived, local)
-            station = DEVICE_STATION.get(r["device_id"], r["device_id"] or "unknown")
+            # legacy-corpus basename, or a pipeline capture with no cap row:
+            # the review carries a device id. Resolve the serial through the
+            # registry, else fall back to the id, else "unknown" — never "".
+            station = device_station(r["device_id"]) or r["device_id"] or "unknown"
             if r["captured_at"]:
                 date, time = r["captured_at"][:10], r["captured_at"][11:16]
             hits = list((Path.home() / "trailcam/landing/assets").glob(
@@ -171,6 +183,7 @@ def main() -> int:
                               else "image"})
         if date is None:
             continue
+        station = station or "unknown"   # never write a blank station
 
         counts = json.loads(r["counts"] or "{}")
         cols = r.keys()

@@ -21,7 +21,7 @@ CB5–CB8 → Enchanted Forest / Cliffside / Trailer Path / North Entry).
 | station registry | `~/trailcam/landing/stations.json` | yes — rename entry / add entry with `device_id` |
 | analysis-time corrections | `~/trailcam/landing/station_overrides.json` | yes — add `device_id → new name` for the window the sidecars carry the old label |
 | detections (derived) | `~/trailcam/derived/detections.db` `captures.station` | no — `stages/detect.py` applies overrides when it writes new rows; old rows are covered by the sync mapping below |
-| log sync + security view mapping | `config/station_renames.json` (read by `scripts/sync_wildlife_log.py` and hoseserv's security view; `DEVICE_STATION` in the sync script covers the legacy export corpus) | yes — add a line to the JSON per rename |
+| log sync + security view mapping | `config/station_renames.json` (read by `scripts/sync_wildlife_log.py` and hoseserv's security view). The sync resolves camera **serials** to stations from `stations.json` itself (`hoseid.stations.by_device`), so there is no hand-copied device map to edit | yes — add a line to the JSON per rename |
 | the wildlife log | `~/trailcam/tags/wildlife.db` `sightings.station`, `stations` table | yes — see SQL below; keep the old name as an alias |
 | encounters (derived) | `~/trailcam/derived/encounters.db` | rebuild (`scripts/build_encounters.py --gap-min 90`; nightly does it too) |
 | Sage's station note | `~/sage/memory/trailcam-stations-and-cameras.md` | yes — Sage answers "which camera is which" from it |
@@ -64,9 +64,10 @@ row as `unmapped`. Use that as the check that nothing was missed.
 6. **Sync mapping**: add a line `"OLD": "NEW"` to `renames` in `config/station_renames.json`
    (the vendor label without the `Cabin - ` prefix). A move that splits one camera name by date
    goes in `special` as `{name, before, after, cutoff}` (see `Cabin - Madrone`). hoseserv's
-   security view reads the same file, so there is no second copy to edit. Update
-   `DEVICE_STATION` in `scripts/sync_wildlife_log.py` only if the device is one of the four
-   legacy-export serials. Check:
+   security view reads the same file, so there is no second copy to edit. Camera
+   **serials** already resolve from `stations.json` (`hoseid.stations.by_device`), so no separate
+   device map to update — but add the `device_id` to the registry if a Reveal export serial is
+   missing, otherwise it won't resolve to a station. Check:
    `.venv/bin/python -c "import sys; sys.path.insert(0,'scripts'); import sync_wildlife_log as s; print(s.normalize_station('OLD','2026-09-12'))"`
 7. **Rebuild encounters**: `.venv/bin/python scripts/build_encounters.py --gap-min 90`
 8. **Sage note**: edit `~/sage/memory/trailcam-stations-and-cameras.md`.
@@ -83,5 +84,9 @@ row as `unmapped`. Use that as the check that nothing was missed.
 - Reveal API sidecars carry the camera's *current* vendor name at fetch time, so after a rename
   new captures arrive under the new name by themselves; the override + mapping exist for the
   backlog and for stale `captures` rows.
-- One sighting (2026-08-22, jackrabbit) has an empty station string; `get_schema` flags it as
-  `blank_station`. Fix by hand if the capture can be attributed.
+- The sync never rewrites rows it has already written, and it never inserts a blank station
+  anymore: a capture with no station label now lands under the registry station for the
+  review's `device_id` (the sidecar serial; `captures` has no serial column), or `"unknown"` if
+  the serial is missing or not registered. One old sighting still carries an empty station — the 2026-08-22
+  jackrabbit (sighting 479), caught before this rule. `get_schema` flags it as `blank_station`;
+  fix it by hand if the capture can be attributed, because the sync will not.

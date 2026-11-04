@@ -68,10 +68,10 @@ def load_candidates():
                       int(ts[8:10]), int(ts[10:12]), int(ts[12:14]))
         species = set(json.loads(r["tags"]))
         hits = list(ASSETS.glob(f"*/**/{base}"))
-        from sync_wildlife_log import DEVICE_STATION
+        from sync_wildlife_log import device_station
         out.append((dt, species, f"legacy:{base}",
                     str(hits[0]) if hits else "", "image",
-                    DEVICE_STATION.get(r["device_id"], "")))
+                    device_station(r["device_id"]) or ""))
 
     # Pipeline captures: species from human review when present, else taxon.
     if DETECTIONS_DB.exists():
