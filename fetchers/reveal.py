@@ -13,8 +13,6 @@ than high confidence purely because of the implicit zone.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import time
 from datetime import date, datetime, timedelta, timezone
 
@@ -22,6 +20,7 @@ import requests
 
 from .common import TMP_DIR, State, download, ingest, log, now_utc
 from hoseid import paths  # noqa: E402 (sys.path set by .common)
+from hoseid.fsio import atomic_write_text  # noqa: E402
 from hoseid.landing import ImmutabilityError  # noqa: E402
 from hoseid.site import TZ as PROPERTY_TZ  # noqa: E402
 from hoseid.station_renames import normalize_station  # noqa: E402
@@ -149,7 +148,7 @@ def write_station_health(readings: dict, path=None) -> None:
                           "capture_time": when.isoformat()}
     body = json.dumps({"updated": now_utc().isoformat(timespec="seconds"),
                        "stations": stations}, indent=1, sort_keys=True)
-    _replace_file(path, body + "\n")
+    atomic_write_text(path, body + "\n", mode=0o644)   # hoseserv reads it
 
 
 def _history_row(line: str) -> dict | None:
@@ -199,22 +198,7 @@ def append_health_history(readings: dict, path=None, today: date | None = None) 
     cutoff = (today - timedelta(days=HISTORY_DAYS)).isoformat()
     body = "".join(json.dumps(rows[k], sort_keys=True) + "\n"
                    for k in sorted(rows) if k[0] >= cutoff)
-    _replace_file(path, body)
-
-
-def _replace_file(path, body: str) -> None:
-    """Write body to path via a temp file + os.replace, so a reader never
-    sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(body)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
-    except BaseException:
-        os.unlink(tmp)
-        raise
+    atomic_write_text(path, body, mode=0o644)
 
 
 def poll(client: RevealClient, state: State) -> list[str]:

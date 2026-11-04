@@ -17,6 +17,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from hoseid import hoseserv, paths  # noqa: E402
+from hoseid.fsio import atomic_write_text  # noqa: E402
 from hoseid.landing import StoreResult, store_asset  # noqa: E402
 from hoseid.sidecar import Sidecar, compute_asset_id  # noqa: E402
 
@@ -47,10 +48,8 @@ class State:
 
     def set(self, key: str, value) -> None:
         self.data[key] = value
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=1))
-        tmp.replace(self.path)
+        # 0644 keeps the mode the old write_text gave it (mkstemp makes 0600)
+        atomic_write_text(self.path, json.dumps(self.data, indent=1), mode=0o644)
 
 
 def now_utc() -> datetime:

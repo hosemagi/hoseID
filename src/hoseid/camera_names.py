@@ -22,14 +22,13 @@ reported, never merged. The first sighting of a device just records its name.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import tempfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import hoseserv, paths, station_renames
+from .fsio import atomic_write_json
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 
@@ -61,13 +60,6 @@ class Rename:
                     f"station not renamed: {self.skipped}")
         return (f"Camera renamed in Arlo: {self.old_station} → {self.new_station} "
                 f"({self.sightings} sightings, {self.captures} captures relabelled)")
-
-
-def _write_json(path: Path, data) -> None:
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    os.replace(tmp, path)
 
 
 def _read_json(path: Path, default):
@@ -123,7 +115,7 @@ def apply_rename(r: Rename, p: Paths | None = None) -> Rename:
     for k, v in list(rules.get("renames", {}).items()):
         if v == old:
             rules["renames"][k] = new
-    _write_json(p.renames, rules)
+    atomic_write_json(p.renames, rules)
     station_renames._default_rules.cache_clear()
 
     # 2. overrides for this device that name the old station
@@ -133,14 +125,14 @@ def apply_rename(r: Rename, p: Paths | None = None) -> Rename:
         if o.get("device_id") == r.device_id and o.get("station") == old:
             o["station"], changed = new, True
     if changed:
-        _write_json(p.overrides, ov)
+        atomic_write_json(p.overrides, ov)
 
     # 3. station registry (keeps position and view)
     reg = _read_json(p.stations, {"stations": []})
     for s in reg.get("stations", []):
         if s.get("name") == old:
             s["name"] = new
-            _write_json(p.stations, reg)
+            atomic_write_json(p.stations, reg)
             break
 
     # 4. wildlife log

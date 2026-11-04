@@ -255,7 +255,8 @@ def test_history_write_failure_logs_and_does_not_block(health, monkeypatch):
 def test_history_failed_replace_leaves_old_file_and_no_temp(hist, monkeypatch):
     reveal.append_health_history({"Ridge": reading(80, 2026, 10, 30)}, hist, TODAY)
     before = hist.read_text()
-    monkeypatch.setattr(reveal.os, "replace", mock.Mock(side_effect=OSError("ro")))
+    from hoseid import fsio
+    monkeypatch.setattr(fsio.os, "replace", mock.Mock(side_effect=OSError("ro")))
     with pytest.raises(OSError):
         reveal.append_health_history({"Ridge": reading(70, 2026, 10, 31)}, hist, TODAY)
     assert hist.read_text() == before

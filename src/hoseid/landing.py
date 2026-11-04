@@ -18,25 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import paths
+from .fsio import atomic_write_bytes
 from .sidecar import Sidecar, SidecarError, compute_asset_id, validate_sidecar
 
 
 class ImmutabilityError(RuntimeError):
     """Raised on an attempt to modify something the landing zone considers already written."""
-
-
-def _atomic_write_bytes(dest: Path, data: bytes) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, dest)          # atomic within a filesystem
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def _atomic_copy(src: Path, dest: Path) -> None:
@@ -103,7 +90,7 @@ def store_asset(src: Path, sidecar: Sidecar, *, allow_existing: bool = True) -> 
             )
         # Semantically identical: keep the original sidecar untouched.
     else:
-        _atomic_write_bytes(sp, sidecar.to_json().encode())
+        atomic_write_bytes(sp, sidecar.to_json().encode())
 
     return StoreResult(sidecar.asset_id, ap, sp, existed)
 
