@@ -15,6 +15,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from hoseid import fsio  # noqa: E402
+
 HOME = Path.home()
 DETECTIONS_DB = HOME / "trailcam/derived/detections.db"
 ASSETS = HOME / "trailcam/landing/assets"
@@ -27,9 +29,7 @@ VISIT_GAP_MIN = 30
 
 
 def ro(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return fsio.connect_ro(path, row_factory=True)
 
 
 def asset_file(asset_id: str) -> Path | None:

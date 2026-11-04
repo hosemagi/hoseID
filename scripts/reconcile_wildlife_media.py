@@ -25,6 +25,7 @@ from pathlib import Path
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from hoseid import fsio  # noqa: E402
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
@@ -52,8 +53,7 @@ FNAME_RE = re.compile(r"^\d{15}-\d+-\d+-(\d{14})-[A-Z]+\d+\.jpg$")
 def load_candidates():
     """All media events: (local_dt, species_set, ref, path, kind, station)."""
     out = []
-    tags = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
-    tags.row_factory = sqlite3.Row
+    tags = fsio.connect_ro(TAGS_DB, row_factory=True)
     latest = {r["basename"]: r for r in tags.execute(
         "SELECT r.* FROM reviews r JOIN (SELECT basename, MAX(id) id FROM"
         " reviews GROUP BY basename) m ON r.id=m.id")}
@@ -75,8 +75,7 @@ def load_candidates():
 
     # Pipeline captures: species from human review when present, else taxon.
     if DETECTIONS_DB.exists():
-        det = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True)
-        det.row_factory = sqlite3.Row
+        det = fsio.connect_ro(DETECTIONS_DB, row_factory=True)
         taxa = {}
         for d in det.execute(
                 "SELECT asset_id, run_id, taxon FROM detections WHERE"

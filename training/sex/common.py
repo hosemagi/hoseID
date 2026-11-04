@@ -11,6 +11,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from hoseid import fsio  # noqa: E402
+
 HOME = Path.home()
 WILDLIFE_DB = HOME / "trailcam/tags/wildlife.db"
 DETECTIONS_DB = HOME / "trailcam/derived/detections.db"
@@ -28,9 +30,7 @@ DINO_SIZE = 448  # multiple of the 14 px patch
 
 
 def ro(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return fsio.connect_ro(path, row_factory=True)
 
 
 def deer_labels() -> dict[str, dict]:

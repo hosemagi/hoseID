@@ -46,6 +46,7 @@ from pydantic import BaseModel
 
 # this repo's src: the megadetector venv has no hoseid install
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from hoseid import fsio  # noqa: E402
 from hoseid.site import TZ as _LOCAL_TZ  # noqa: E402
 
 ASSETS = Path("/Users/hosebot/trailcam/landing/assets")
@@ -380,7 +381,7 @@ def config():
 def wildlife_individuals() -> list[dict]:
     if not WILDLIFE_DB.exists():
         return []
-    wconn = sqlite3.connect(f"file:{WILDLIFE_DB}?mode=ro", uri=True)
+    wconn = fsio.connect_ro(WILDLIFE_DB)
     out = [{"name": n, "species": sp} for n, sp in
            wconn.execute("SELECT name, species FROM individuals ORDER BY name")]
     wconn.close()

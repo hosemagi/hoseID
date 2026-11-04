@@ -1,8 +1,15 @@
 """hoseid.fsio: atomic writes land the content, and a failed write re-raises,
-leaves no temp file and does not touch the existing destination."""
+leaves no temp file and does not touch the existing destination; connect_ro is
+a read-only opener that survives a path with a space or '#' in it (the old
+f"file:{path}?mode=ro" broke on that), refuses to write, and waits a moment for
+a concurrent writer instead of failing with 'database is locked'."""
 import json
 import os
+import sqlite3
 import stat
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
@@ -58,3 +65,119 @@ def test_state_set_round_trips(tmp_path):
     assert State(path).get("health") == {"reveal": "BROKEN"}
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
     assert [p.name for p in path.parent.iterdir()] == ["fetch-state.json"]
+
+
+def _make_db(path, journal=True):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    if not journal:
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (k, v)")
+    conn.execute("INSERT INTO t VALUES ('a', 1)")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_connect_ro_reads(tmp_path):
+    p = _make_db(tmp_path / "hoseint.db")
+    conn = fsio.connect_ro(p)
+    assert conn.execute("SELECT v FROM t WHERE k='a'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_connect_ro_path_with_space_and_hash(tmp_path):
+    """The regression marker: a '#' in the path is read by sqlite3's URI
+    parser as the start of a fragment, so the old f"file:{path}?mode=ro" points
+    at a truncated, empty db. as_uri() percent-encodes it and the helper reads
+    the real table."""
+    p = _make_db(tmp_path / "dir with space#and?/hoseint.db")
+    conn = fsio.connect_ro(p)
+    assert conn.execute("SELECT v FROM t WHERE k='a'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_hand_built_uri_breaks_on_hash(tmp_path):
+    p = _make_db(tmp_path / "dir with space#and?/hoseint.db")
+    # The '#' truncates the path as a URI fragment, so the hand-built URI opens
+    # an empty db: reading the real table fails instead of being read.
+    conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("SELECT v FROM t WHERE k='a'")
+
+
+def test_connect_ro_refuses_write(tmp_path):
+    p = _make_db(tmp_path / "hoseint.db")
+    conn = fsio.connect_ro(p)
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("INSERT INTO t VALUES ('b', 2)")
+    conn.close()
+
+
+def test_connect_ro_row_factory(tmp_path):
+    p = _make_db(tmp_path / "hoseint.db")
+    conn = fsio.connect_ro(p, row_factory=True)
+    row = conn.execute("SELECT k, v FROM t").fetchone()
+    assert row["k"] == "a" and row["v"] == 1
+    conn.close()
+
+
+def _hold_exclusive(path, held, release):
+    """Hold BEGIN EXCLUSIVE until `release` is set. RESERVED (BEGIN
+    IMMEDIATE) does not block readers in either journal mode; EXCLUSIVE in
+    rollback-journal mode does, which is the window a nightly writer's
+    commit opens."""
+    w = sqlite3.connect(str(path))
+    w.execute("BEGIN EXCLUSIVE")
+    held.set()
+    release.wait(5)
+    w.rollback()
+    w.close()
+
+
+def test_read_waits_for_writer(tmp_path):
+    """A rollback-journal db: while another connection holds an exclusive
+    lock, a no-timeout reader fails with 'database is locked' (the bug), and
+    connect_ro waits for the lock to clear and then reads."""
+    p = _make_db(tmp_path / "hoseint.db")
+    held, release = threading.Event(), threading.Event()
+    blocker = threading.Thread(target=_hold_exclusive, args=(p, held, release))
+    blocker.start()
+    try:
+        assert held.wait(5)
+        bare = sqlite3.connect(p.absolute().as_uri() + "?mode=ro", uri=True,
+                               timeout=0)
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            bare.execute("SELECT v FROM t").fetchone()
+        bare.close()
+
+        threading.Timer(0.3, release.set).start()
+        start = time.monotonic()
+        conn = fsio.connect_ro(p)
+        value = conn.execute("SELECT v FROM t WHERE k='a'").fetchone()[0]
+        waited = time.monotonic() - start
+        conn.close()
+    finally:
+        release.set()
+        blocker.join()
+    assert value == 1
+    assert waited >= 0.2  # it waited for the lock rather than slipping past
+
+
+def test_read_during_writer_wal(tmp_path):
+    """A WAL db: a reader is never blocked by a writer, even one holding an
+    exclusive transaction; connect_ro reads the last committed value."""
+    p = _make_db(tmp_path / "wal.db", journal=False)
+    held, release = threading.Event(), threading.Event()
+    blocker = threading.Thread(target=_hold_exclusive, args=(p, held, release))
+    blocker.start()
+    try:
+        assert held.wait(5)
+        conn = fsio.connect_ro(p)
+        value = conn.execute("SELECT v FROM t WHERE k='a'").fetchone()[0]
+        conn.close()
+    finally:
+        release.set()
+        blocker.join()
+    assert value == 1

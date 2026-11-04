@@ -22,7 +22,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from hoseid import paths
+from hoseid import fsio, paths
 from hoseid.mcp_wildlife import solar
 
 # local-hour buckets, inclusive; night wraps midnight. Same buckets as Sage's
@@ -70,9 +70,7 @@ def connect(db: Path | None = None) -> sqlite3.Connection:
     p = db or wildlife_db()
     if not p.exists():
         raise FileNotFoundError(f"wildlife log not found: {p}")
-    conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return fsio.connect_ro(p, row_factory=True)
 
 
 # ── filter parsing ────────────────────────────────────────────────────────
@@ -388,9 +386,8 @@ def _encounter_counts(rows: list[dict], db: Path | None = None) -> dict[str, Any
     if not p.exists():
         return None
     ids = {r["sighting_id"] for r in rows}
-    conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    conn = fsio.connect_ro(p, row_factory=True)
     try:
-        conn.row_factory = sqlite3.Row
         meta = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM meta")}
         n = 0
         multi = 0

@@ -43,6 +43,7 @@ import urllib3
 
 from .common import (DEFAULT_WEBHOOK, State, hoseflow_results, log, notify,
                      notifications_sent, post_to_hoseflow)
+from hoseid import fsio  # noqa: E402 (sys.path set by .common)
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402 (sys.path set by .common)
 
 REPO = Path(__file__).resolve().parents[1]
@@ -147,8 +148,7 @@ def capture_buck_prob(conn, asset_id: str, run_id: str) -> float | None:
 def _active_zones() -> list[dict]:
     if not TAGS_DB.exists():
         return []
-    conn = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = fsio.connect_ro(TAGS_DB, row_factory=True)
     epochs = {r["device_id"]: r["e"] for r in conn.execute(
         "SELECT device_id, MAX(epoch) e FROM camera_epochs GROUP BY device_id")}
     zones = [dict(r) for r in conn.execute("SELECT * FROM exclusion_zones")
@@ -270,8 +270,7 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
     cfg = cfg_all.get("alerts", {})
     if not asset_ids:
         return 0
-    conn = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = fsio.connect_ro(DETECTIONS_DB, row_factory=True)
     zones = _active_zones()
     sent = 0
     failed: list[dict] = []

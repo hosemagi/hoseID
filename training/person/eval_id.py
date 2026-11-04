@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from hoseid import fsio  # noqa: E402
 from training.person.common import OUT, load_rows  # noqa: E402
 
 TAGS_DB = Path.home() / "trailcam/tags/tags.db"
@@ -37,7 +38,7 @@ K = 5
 
 def labeled() -> tuple[list[dict], list[int]]:
     rows = load_rows()
-    conn = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
+    conn = fsio.connect_ro(TAGS_DB)
     people = {r[0] for r in conn.execute("SELECT name FROM people")}
     latest = dict(conn.execute("""
         SELECT r.asset_id, r.individual FROM reviews r

@@ -29,6 +29,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from hoseid import fsio  # noqa: E402
+
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 OUT_DB = Path.home() / "trailcam/derived/encounters.db"
 
@@ -75,8 +77,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 
 def build(gap_min: int) -> dict:
-    wl = sqlite3.connect(f"file:{WILDLIFE_DB}?mode=ro", uri=True)
-    wl.row_factory = sqlite3.Row
+    wl = fsio.connect_ro(WILDLIFE_DB, row_factory=True)
     rows = [dict(r) for r in wl.execute(
         "SELECT sighting_id, date, time, station, species, individual,"
         " individual_confidence, count FROM sightings"

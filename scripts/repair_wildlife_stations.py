@@ -18,6 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sync_wildlife_log import local_date, normalize_station  # noqa: E402
 
+from hoseid import fsio  # noqa: E402
+
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
 
@@ -25,8 +27,7 @@ DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
 def main() -> int:
     wl = sqlite3.connect(WILDLIFE_DB)
     wl.row_factory = sqlite3.Row
-    det = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True)
-    det.row_factory = sqlite3.Row
+    det = fsio.connect_ro(DETECTIONS_DB, row_factory=True)
 
     known = {r["name"] for r in wl.execute("SELECT name FROM stations")}
     fixed = unresolved = 0

@@ -21,7 +21,7 @@ from pathlib import Path
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from hoseid import station_renames, stations  # noqa: E402
+from hoseid import fsio, station_renames, stations  # noqa: E402
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
@@ -117,12 +117,9 @@ def main() -> int:
         # M / F; NULL = not set. hoseserv's wildlife API adds it the same way
         wl.execute("ALTER TABLE sightings ADD COLUMN sex TEXT"
                    " CHECK (sex IN ('M','F'))")
-    tags = sqlite3.connect(f"file:{TAGS_DB}?mode=ro", uri=True)
-    tags.row_factory = sqlite3.Row
-    det = sqlite3.connect(f"file:{DETECTIONS_DB}?mode=ro", uri=True) \
+    tags = fsio.connect_ro(TAGS_DB, row_factory=True)
+    det = fsio.connect_ro(DETECTIONS_DB, row_factory=True) \
         if DETECTIONS_DB.exists() else None
-    if det:
-        det.row_factory = sqlite3.Row
 
     species_of = dict(wl.execute("SELECT name, species FROM individuals").fetchall())
     row = wl.execute("SELECT value FROM meta WHERE key='review_watermark'").fetchone()
