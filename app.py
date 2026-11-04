@@ -544,7 +544,14 @@ def suppressed(device: str = "", since: str = "", until: str = ""):
 
 
 @app.get("/api/queue")
-def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
+def queue(status: str = "unreviewed", device: str = "", sort: str = "conf",
+          since: str = ""):
+    # since: local ISO date (YYYY-MM-DD); captures before it are dropped up front
+    if since:
+        try:
+            since = datetime.strptime(since, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            raise HTTPException(400, f"since must be YYYY-MM-DD, got {since!r}")
     with db() as conn:
         reviewed = latest_reviews(conn)
         zones_all = active_zones(conn)
@@ -555,6 +562,8 @@ def queue(status: str = "unreviewed", device: str = "", sort: str = "conf"):
     items = []
     for im in all_images().values():
         if device and im["device_id"] != device:
+            continue
+        if since and (im["captured_at"] or "")[:10] < since:
             continue
         r = reviewed.get(im["asset_id"])
         if status == "unreviewed" and r:

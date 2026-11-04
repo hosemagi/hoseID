@@ -176,3 +176,43 @@ def test_person_names_are_unique_and_never_shadow_wildlife(people_env):
             app.add_person(app.PersonIn(name=bad))
         assert e.value.status_code == code
     assert [p["name"] for p in app.config()["people"]] == ["Sam"]
+
+
+# --- since= (local ISO date cutoff, used by hoseserv's Camera Review history) ---
+
+@pytest.fixture
+def since_env(env):
+    _seed(env, IMG, ".jpg", media_type="image", offset=None, taxon="white-tailed deer",
+          conf=0.88, bbox=[0.3, 0.1, 0.2, 0.3], cap_time="2026-10-30T12:00:00")
+    _seed(env, VID, ".mp4", media_type="video", offset=3.5, taxon="black bear",
+          conf=0.94, bbox=[0.1, 0.2, 0.4, 0.5], cap_time="2026-10-20T12:00:00")
+    app.review(app.ReviewIn(asset_id="capture:" + IMG, tags=["deer"]))
+    app.review(app.ReviewIn(asset_id="capture:" + VID, tags=["bear"]))
+    return env
+
+
+def test_since_drops_captures_before_the_cutoff(since_env):
+    new = app.queue(status="reviewed", sort="time_desc", since="2026-10-27")
+    assert [i["asset_id"] for i in new["items"]] == ["capture:" + IMG]
+    assert new["count"] == 1
+    assert new["items"][0]["review"]["tags"] == ["deer"]   # item shape unchanged
+
+
+def test_since_cutoff_compares_the_local_date(since_env):
+    # captured_at is local naive ISO; the cutoff day itself is kept
+    day = _items(status="reviewed")["capture:" + IMG]["captured_at"][:10]
+    kept = app.queue(status="reviewed", since=day)["items"]
+    assert "capture:" + IMG in {i["asset_id"] for i in kept}
+
+
+def test_since_absent_or_empty_changes_nothing(since_env):
+    everything = {"capture:" + IMG, "capture:" + VID}
+    assert set(_items(status="reviewed")) == everything
+    assert {i["asset_id"] for i in app.queue(status="reviewed", since="")["items"]} == everything
+
+
+@pytest.mark.parametrize("bad", ["yesterday", "2026-13-01", "2026-10-30T00:00", "10/30/2026"])
+def test_since_rejects_a_bad_value(since_env, bad):
+    with pytest.raises(app.HTTPException) as e:
+        app.queue(status="reviewed", since=bad)
+    assert e.value.status_code == 400
