@@ -7,6 +7,12 @@ fails. Failures and every other path are kept.
 """
 import logging
 
+import pytest
+
+# mcp lives in the repo .venv only; the suite's interpreter (the review app's
+# venv) skips this file rather than stopping the whole run at collection.
+pytest.importorskip("mcp.server.fastmcp")
+
 from hoseid.mcp_wildlife import app
 
 
