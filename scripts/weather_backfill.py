@@ -24,7 +24,8 @@ import urllib.request
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from hoseid.site import TZ as SITE_TZ  # noqa: E402
+from hoseid.schema import SIGHTINGS_COLUMNS, ensure_columns
+from hoseid.site import TZ as SITE_TZ
 
 DB = Path.home() / "trailcam/tags/wildlife.db"
 LAT, LON = 39.3212, -120.9713
@@ -92,9 +93,7 @@ def main() -> int:
 
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(sightings)")}
-    if "weather" not in cols:
-        conn.execute("ALTER TABLE sightings ADD COLUMN weather TEXT")
+    ensure_columns(conn, "sightings", {"weather": SIGHTINGS_COLUMNS["weather"]})
 
     series = build_series()
     where = "" if args.refresh else "WHERE weather IS NULL"

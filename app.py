@@ -46,8 +46,13 @@ from pydantic import BaseModel
 
 # this repo's src: the megadetector venv has no hoseid install
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from hoseid import fsio  # noqa: E402
-from hoseid.site import TZ as _LOCAL_TZ  # noqa: E402
+from hoseid import fsio
+from hoseid.schema import (
+    EXCLUSION_ZONES_COLUMNS,
+    REVIEWS_COLUMNS,
+    ensure_columns,
+)
+from hoseid.site import TZ as _LOCAL_TZ
 
 ASSETS = Path("/Users/hosebot/trailcam/landing/assets")
 SIDECARS = Path("/Users/hosebot/trailcam/landing/sidecars")
@@ -98,29 +103,12 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_reviews_basename ON reviews(basename)"
         )
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(reviews)")}
-        if "asset_id" not in cols:
-            # Also added by `hoseid backfill-reviews`, which fills it for existing
-            # rows. Created here too so a fresh database has it from the start.
-            conn.execute("ALTER TABLE reviews ADD COLUMN asset_id TEXT")
+        # columns newer than the CREATE above (see REVIEWS_COLUMNS); the
+        # asset_id index below needs that column to exist first
+        ensure_columns(conn, "reviews", REVIEWS_COLUMNS)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_reviews_asset ON reviews(asset_id)"
         )
-        if "counts" not in cols:
-            # JSON object tag -> count; a tag absent here counts as 1
-            conn.execute(
-                "ALTER TABLE reviews ADD COLUMN counts TEXT NOT NULL DEFAULT '{}'"
-            )
-        if "individual" not in cols:
-            # named-animal attribution at review time (Al/Ben/Boar...);
-            # confidence is mandatory whenever individual is set
-            conn.execute("ALTER TABLE reviews ADD COLUMN individual TEXT")
-            conn.execute("ALTER TABLE reviews ADD COLUMN"
-                         " individual_confidence TEXT")
-        if "sex" not in cols:
-            # M / F; NULL = not set. Carried into the wildlife log by
-            # scripts/sync_wildlife_log.py
-            conn.execute("ALTER TABLE reviews ADD COLUMN sex TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS exclusion_zones (
                 id INTEGER PRIMARY KEY,
@@ -134,11 +122,7 @@ def init_db():
                 updated_at TEXT NOT NULL
             )
         """)
-        zcols = {r[1] for r in conn.execute("PRAGMA table_info(exclusion_zones)")}
-        if "epoch" not in zcols:
-            conn.execute(
-                "ALTER TABLE exclusion_zones ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1"
-            )
+        ensure_columns(conn, "exclusion_zones", EXCLUSION_ZONES_COLUMNS)
         # Deployment epochs: bumping deactivates a camera's zone set wholesale.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS camera_epochs (

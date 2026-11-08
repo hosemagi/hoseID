@@ -26,6 +26,7 @@ from pathlib import Path
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from hoseid import fsio  # noqa: E402
+from hoseid.schema import SIGHTINGS_COLUMNS, ensure_columns
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
@@ -119,10 +120,7 @@ def main() -> int:
 
     wl = sqlite3.connect(WILDLIFE_DB)
     wl.row_factory = sqlite3.Row
-    cols = {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}
-    if "media_refs" not in cols:
-        wl.execute("ALTER TABLE sightings ADD COLUMN media_refs TEXT"
-                   " NOT NULL DEFAULT '[]'")
+    ensure_columns(wl, "sightings", {"media_refs": SIGHTINGS_COLUMNS["media_refs"]})
 
     candidates = load_candidates()
     tol = timedelta(minutes=args.window_min)

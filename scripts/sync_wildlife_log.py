@@ -22,6 +22,7 @@ from pathlib import Path
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from hoseid import fsio, station_renames, stations  # noqa: E402
+from hoseid.schema import SIGHTINGS_COLUMNS, ensure_columns
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
@@ -110,13 +111,13 @@ def main() -> int:
 
     wl = sqlite3.connect(WILDLIFE_DB)
     wl.row_factory = sqlite3.Row
-    if "media_refs" not in {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}:
-        wl.execute("ALTER TABLE sightings ADD COLUMN media_refs TEXT"
-                   " NOT NULL DEFAULT '[]'")
-    if "sex" not in {r[1] for r in wl.execute("PRAGMA table_info(sightings)")}:
-        # M / F; NULL = not set. hoseserv's wildlife API adds it the same way
-        wl.execute("ALTER TABLE sightings ADD COLUMN sex TEXT"
-                   " CHECK (sex IN ('M','F'))")
+    # media_refs and sex; weather is added by weather_backfill.py
+    ensure_columns(
+        wl, "sightings", {
+            "media_refs": SIGHTINGS_COLUMNS["media_refs"],
+            "sex": SIGHTINGS_COLUMNS["sex"],
+        }
+    )
     tags = fsio.connect_ro(TAGS_DB, row_factory=True)
     det = fsio.connect_ro(DETECTIONS_DB, row_factory=True) \
         if DETECTIONS_DB.exists() else None

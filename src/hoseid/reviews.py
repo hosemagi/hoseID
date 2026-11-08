@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import db, paths
+from .schema import REVIEWS_COLUMNS, ensure_columns
 from .sidecar import compute_asset_id
 
 VOCAB_CONFIG = Path(__file__).resolve().parents[2] / "config" / "review_vocab.json"
@@ -159,9 +160,8 @@ def _ensure_asset_id_column(conn: sqlite3.Connection) -> None:
     vestigial `tags` table as a side effect of asking a question. Matching the review app's own
     idempotent-DDL style keeps the two writers from fighting over one schema counter.
     """
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(reviews)").fetchall()}
-    if "asset_id" not in cols:
-        conn.execute("ALTER TABLE reviews ADD COLUMN asset_id TEXT")
+    added = ensure_columns(conn, "reviews", {"asset_id": REVIEWS_COLUMNS["asset_id"]})
+    if added:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_asset ON reviews(asset_id)")
         conn.commit()
 
