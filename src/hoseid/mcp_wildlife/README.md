@@ -30,7 +30,8 @@ claude mcp add --transport http wildlife http://localhost:8853/mcp
 - **Light is computed, not hardcoded.** `light` (daylight / civil_twilight / dark) and
   `legal_light` (sunrise−30 min … sunset+30 min) come from sunrise/sunset at the property for
   the row's date (`solar.py`, Almanac-for-Computers algorithm, coords from
-  `landing/stations.json` or `WILDLIFE_LAT/LON`). Sunrise moves ~1 h across the season.
+  `hoseid.site.site_coords()`: `SITE_LAT/SITE_LON`, else `landing/stations.json`). Sunrise moves
+  ~1 h across the season.
 
 ## Tools (all `readOnlyHint`)
 
@@ -94,6 +95,9 @@ anything else is reported in the manifest with the reason, never as bytes.
 ## Env
 
 `WILDLIFE_MCP_HOST` (0.0.0.0) · `WILDLIFE_MCP_PORT` (8853) · `WILDLIFE_MCP_HTTP_PORT` (8854, loopback) ·
-`WILDLIFE_MCP_TLS` (0) · `WILDLIFE_MCP_CERTFILE`/`WILDLIFE_MCP_KEYFILE` · `WILDLIFE_MCP_SAN_EXTRA` · `WILDLIFE_LAT`/`WILDLIFE_LON`
-(default: first station with coords in stations.json) · `HOSEID_REVIEW_URL`
+`WILDLIFE_MCP_TLS` (0) · `WILDLIFE_MCP_CERTFILE`/`WILDLIFE_MCP_KEYFILE` · `WILDLIFE_MCP_SAN_EXTRA` ·
+`SITE_LAT`/`SITE_LON` (property coords for sunrise, the same variables hoseserv reads; default:
+first station with coords in stations.json, then Storm Oak; set them in the plist's
+`EnvironmentVariables`) · `WILDLIFE_LAT`/`WILDLIFE_LON` (deprecated alias, used only when `SITE_*`
+is unset, warns once on stderr) · `HOSEID_REVIEW_URL`
 (http://localhost:8870) · `HOSEID_ROOT` (~/trailcam)

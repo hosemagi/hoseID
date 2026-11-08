@@ -7,40 +7,27 @@ a fixed cutoff. Algorithm: Almanac for Computers (1990) sunrise/sunset, the
 one behind most "NOAA-style" calculators; accurate to a minute or two here,
 which is well inside the camera-clock jitter.
 
-Coordinates come from WILDLIFE_LAT/WILDLIFE_LON, else the first station in
-landing/stations.json with coordinates, else a Storm Oak fallback.
+Coordinates come from hoseid.site.site_coords(): SITE_LAT/SITE_LON (as in
+hoseserv), else the deprecated WILDLIFE_LAT/WILDLIFE_LON alias, else the first
+station in landing/stations.json with coordinates, else Storm Oak.
 """
 from __future__ import annotations
 
-import json
 import math
-import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 
-from hoseid import paths
-from hoseid.site import TZ as LOCAL_TZ
+from hoseid.site import TZ as LOCAL_TZ, site_coords
 
-FALLBACK_LAT, FALLBACK_LON = 39.32097, -120.97152   # Storm Oak, landing/stations.json
 ZENITH_OFFICIAL = 90.833   # sunrise/sunset, refraction + solar radius
 ZENITH_CIVIL = 96.0        # civil dawn/dusk
 LEGAL_MARGIN = timedelta(minutes=30)
 
 
 def property_coords() -> tuple[float, float, str]:
-    """(lat, lon, source)."""
-    lat, lon = os.environ.get("WILDLIFE_LAT"), os.environ.get("WILDLIFE_LON")
-    if lat and lon:
-        return float(lat), float(lon), "env WILDLIFE_LAT/LON"
-    try:
-        reg = json.loads(paths.stations_file().read_text())
-        for s in reg.get("stations", []):
-            if s.get("lat") is not None and s.get("lon") is not None:
-                return float(s["lat"]), float(s["lon"]), f"stations.json:{s.get('name')}"
-    except (OSError, ValueError):
-        pass
-    return FALLBACK_LAT, FALLBACK_LON, "fallback (Storm Oak)"
+    """(lat, lon, source); see hoseid.site.site_coords()."""
+    return site_coords()
 
 
 def _event_utc_hours(d: date, lat: float, lon: float, zenith: float, rising: bool) -> float | None:
