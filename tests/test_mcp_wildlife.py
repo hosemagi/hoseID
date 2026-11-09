@@ -20,6 +20,7 @@ import pytest
 
 from hoseid import paths
 from hoseid.mcp_wildlife import media, queries, solar
+from hoseid.schema import SIGHTINGS_COLUMNS, ensure_columns
 
 pytest.importorskip("mcp.server.fastmcp")
 from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
@@ -133,8 +134,8 @@ def root(tmp_path, monkeypatch):
         (1, "map CB stations", "open", "2026-08-16", None, ""),
         (2, "fix CB1 tag", "done", "2026-08-16", "2026-08-16", ""),
     ])
-    # same ALTER as scripts/sync_wildlife_log.py; rows 2 (Al) and 3 are bucks, 6 is a sow
-    conn.execute("ALTER TABLE sightings ADD COLUMN sex TEXT CHECK (sex IN ('M','F'))")
+    # sex as scripts/sync_wildlife_log.py adds it; rows 2 (Al) and 3 are bucks, 6 is a sow
+    ensure_columns(conn, "sightings", {"sex": SIGHTINGS_COLUMNS["sex"]})
     conn.executemany("UPDATE sightings SET sex=? WHERE sighting_id=?", [("M", 2), ("M", 3), ("F", 6)])
     conn.commit()
     conn.close()

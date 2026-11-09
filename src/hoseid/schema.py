@@ -25,17 +25,16 @@ def ensure_columns(
 
     Reads ``PRAGMA table_info`` positionally (row index ``[1]`` is the name) so
     it works whether or not the caller has set a ``row_factory``; runs
-    ``ALTER TABLE ADD COLUMN`` for each missing one; commits once, only if it
-    added something; and returns the added names. Idempotent: a second call
-    with the same (or a superset) of columns returns ``[]``.
+    ``ALTER TABLE ADD COLUMN`` for each missing one; and returns the added
+    names. It does NOT commit, so each caller keeps its own commit behaviour
+    (a call that adds nothing is a pure no-op and leaves any open
+    transaction untouched). Idempotent: a second call with the same (or a
+    superset) of columns returns ``[]``.
     """
     existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
     missing = [name for name, ddl in cols.items() if name not in existing]
-    if not missing:
-        return []
     for name in missing:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {cols[name]}")
-    conn.commit()
     return missing
 
 
@@ -64,6 +63,6 @@ EXCLUSION_ZONES_COLUMNS: dict[str, str] = {
 SIGHTINGS_COLUMNS: dict[str, str] = {
     "media_refs": "TEXT NOT NULL DEFAULT '[]'",
     # M / F; NULL = not set
-    "sex": "TEXT CHECK (sex IN ('M', 'F'))",
+    "sex": "TEXT CHECK (sex IN ('M','F'))",
     "weather": "TEXT",
 }
