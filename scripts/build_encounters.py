@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -84,7 +83,7 @@ def build(gap_min: int) -> dict:
         " WHERE time IS NOT NULL ORDER BY species, date, time")]
     wl.close()
 
-    out = sqlite3.connect(OUT_DB)
+    out = fsio.connect_rw(OUT_DB)
     out.executescript(SCHEMA)
     gap = timedelta(minutes=gap_min)
     n_enc = 0

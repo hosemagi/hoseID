@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 import sys
 import zoneinfo
 from datetime import datetime, timedelta
@@ -118,8 +117,7 @@ def main() -> int:
                          "hand-logged times that drift from capture clocks")
     args = ap.parse_args()
 
-    wl = sqlite3.connect(WILDLIFE_DB)
-    wl.row_factory = sqlite3.Row
+    wl = fsio.connect_rw(WILDLIFE_DB, row_factory=True)
     ensure_columns(wl, "sightings", {"media_refs": SIGHTINGS_COLUMNS["media_refs"]})
 
     candidates = load_candidates()

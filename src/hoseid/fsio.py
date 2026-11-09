@@ -1,4 +1,4 @@
-"""Atomic file writes and the one read-only sqlite opener.
+"""Atomic file writes, and the read-only and writable sqlite openers.
 
 Atomic writes: temp file in the destination directory, fsync, os.replace. A
 reader sees either the old file or the new one, never half of either; on any
@@ -16,7 +16,15 @@ the whole pipeline. connect_ro opens a sqlite file mode=ro so the write is
 refused at the connection; as_uri() percent-encodes the path, so a space, '#'
 or '?' in it is safe; and a 5 s busy_timeout lets a read land behind a
 concurrent writer instead of failing with 'database is locked' (the nightly
-pipeline and the fetch daemon both write the databases these readers open)."""
+pipeline and the fetch daemon both write the databases these readers open).
+
+The writable opener (connect_rw) gives every writer of wildlife.db (the review
+app, the nightly log sync, the reconcile, repair and weather backfill scripts)
+the same 30 s busy_timeout that db.py and camera_names.py already use. A bare
+sqlite3.connect() gets sqlite3's 5 s default, so a long nightly write could fail
+a concurrent review save with 'database is locked' depending on which path got
+there first. It does not set WAL or foreign_keys; db.py keeps those for the
+pipeline."""
 from __future__ import annotations
 
 import json
@@ -63,6 +71,21 @@ def connect_ro(path: Path | str, row_factory: bool = False) -> sqlite3.Connectio
     uri = Path(path).absolute().as_uri() + "?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=5.0)
     conn.execute("PRAGMA busy_timeout = 5000")
+    if row_factory:
+        conn.row_factory = sqlite3.Row
+    return conn
+
+
+def connect_rw(path: Path | str, row_factory: bool = False) -> sqlite3.Connection:
+    """Open a sqlite file for writing. as_uri() percent-encodes the path, so a
+    space, '#' or '?' in it is safe (a hand-built 'file:{path}' URI is not); a
+    30 s busy_timeout lets a write land behind a concurrent writer instead of
+    failing with 'database is locked' (the review app and the nightly sync both
+    write wildlife.db). Matches db.py's 30 s and leaves WAL/foreign_keys to it
+    for the pipeline."""
+    uri = Path(path).absolute().as_uri()
+    conn = sqlite3.connect(uri, uri=True, timeout=30.0)
+    conn.execute("PRAGMA busy_timeout = 30000")
     if row_factory:
         conn.row_factory = sqlite3.Row
     return conn

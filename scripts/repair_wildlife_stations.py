@@ -11,7 +11,6 @@ Re-runnable; only touches rows whose station is not a known station name.
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -25,8 +24,7 @@ DETECTIONS_DB = Path.home() / "trailcam/derived/detections.db"
 
 
 def main() -> int:
-    wl = sqlite3.connect(WILDLIFE_DB)
-    wl.row_factory = sqlite3.Row
+    wl = fsio.connect_rw(WILDLIFE_DB, row_factory=True)
     det = fsio.connect_ro(DETECTIONS_DB, row_factory=True)
 
     known = {r["name"] for r in wl.execute("SELECT name FROM stations")}

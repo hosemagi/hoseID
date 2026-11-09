@@ -77,8 +77,7 @@ PRESET_TAGS = [
 
 
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = fsio.connect_rw(DB_PATH, row_factory=True)
     return conn
 
 
@@ -175,8 +174,7 @@ def pipeline_images() -> dict:
     mtime = DETECTIONS_DB.stat().st_mtime
     if _pipeline_cache["mtime"] == mtime:
         return _pipeline_cache["items"]
-    conn = sqlite3.connect(DETECTIONS_DB)
-    conn.row_factory = sqlite3.Row
+    conn = fsio.connect_ro(DETECTIONS_DB, row_factory=True)
     # latest capture row per asset (a standing run_id keeps this to one row,
     # but re-runs under new ids must not duplicate queue entries)
     caps = {r["asset_id"]: r for r in conn.execute(

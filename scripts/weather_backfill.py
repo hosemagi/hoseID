@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +23,7 @@ import urllib.request
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from hoseid import fsio
 from hoseid.schema import SIGHTINGS_COLUMNS, ensure_columns
 from hoseid.site import TZ as SITE_TZ
 
@@ -91,8 +91,7 @@ def main() -> int:
                     help="recompute even where weather already present")
     args = ap.parse_args()
 
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
+    conn = fsio.connect_rw(DB, row_factory=True)
     ensure_columns(conn, "sightings", {"weather": SIGHTINGS_COLUMNS["weather"]})
 
     series = build_series()

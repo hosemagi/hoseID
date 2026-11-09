@@ -12,10 +12,13 @@ Idempotent-ish: refuses to run if the document is already imported.
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# this repo's src first: the venv's editable install may point at another checkout
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from hoseid import fsio
 
 DB = Path.home() / "trailcam/tags/wildlife.db"
 SRC = Path.home() / "trailcam/tags/wildlife-log-source-2026-08-16.md"
@@ -319,7 +322,7 @@ OPEN_ITEMS = [
 
 
 def main() -> int:
-    conn = sqlite3.connect(DB)
+    conn = fsio.connect_rw(DB)
     conn.executescript(MIGRATION.read_text())
     if conn.execute("SELECT 1 FROM documents WHERE name=?", (DOC,)).fetchone():
         print("already imported; refusing to double-import")

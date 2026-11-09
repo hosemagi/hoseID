@@ -21,9 +21,9 @@ from pathlib import Path
 
 # this repo's src first: the venv's editable install may point at another checkout
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from hoseid import fsio, station_renames, stations  # noqa: E402
+from hoseid import fsio, station_renames, stations
 from hoseid.schema import SIGHTINGS_COLUMNS, ensure_columns
-from hoseid.site import TZ as LOCAL_TZ  # noqa: E402
+from hoseid.site import TZ as LOCAL_TZ
 
 WILDLIFE_DB = Path.home() / "trailcam/tags/wildlife.db"
 TAGS_DB = Path.home() / "trailcam/tags/tags.db"
@@ -109,8 +109,7 @@ def main() -> int:
                          "captures already claimed by existing sightings")
     args = ap.parse_args()
 
-    wl = sqlite3.connect(WILDLIFE_DB)
-    wl.row_factory = sqlite3.Row
+    wl = fsio.connect_rw(WILDLIFE_DB, row_factory=True)
     # media_refs and sex; weather is added by weather_backfill.py
     ensure_columns(
         wl, "sightings", {

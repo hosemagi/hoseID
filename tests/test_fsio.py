@@ -181,3 +181,104 @@ def test_read_during_writer_wal(tmp_path):
         release.set()
         blocker.join()
     assert value == 1
+
+
+def test_connect_rw_writes(tmp_path):
+    p = _make_db(tmp_path / "hoseint.db")
+    conn = fsio.connect_rw(p)
+    conn.execute("INSERT INTO t VALUES ('b', 2)")
+    conn.commit()
+    conn.close()
+    probe = sqlite3.connect(str(p))
+    assert probe.execute("SELECT v FROM t WHERE k='b'").fetchone()[0] == 2
+    probe.close()
+
+
+def test_connect_rw_row_factory(tmp_path):
+    p = _make_db(tmp_path / "hoseint.db")
+    conn = fsio.connect_rw(p, row_factory=True)
+    row = conn.execute("SELECT k, v FROM t").fetchone()
+    assert row["k"] == "a" and row["v"] == 1
+    conn.close()
+
+
+def test_connect_rw_busy_timeout_is_30s(tmp_path):
+    """busy_timeout is 30 s, matching db.py and camera_names.py, not sqlite3's
+    5 s default."""
+    p = _make_db(tmp_path / "hoseint.db")
+    conn = fsio.connect_rw(p)
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+    conn.close()
+
+
+def _hold_exclusive_unblocked(path, held, release):
+    """Hold an EXCLUSIVE lock until `release` fires, with no 5 s cap: a release
+    past sqlite3's 5 s default is what lets this test tell 30 s from 5 s."""
+    w = sqlite3.connect(str(path))
+    w.execute("BEGIN EXCLUSIVE")
+    held.set()
+    release.wait()
+    w.rollback()
+    w.close()
+
+
+def test_connect_rw_waits_30s_for_writer(tmp_path):
+    """A rollback-journal db: while a writer holds an EXCLUSIVE lock, another
+    writer opened before the lock clears waits it out and then succeeds. The
+    lock is released 6 s after the blocker took it — beyond sqlite3's 5 s
+    default but within connect_rw's 30 s busy_timeout — so a 30 s opener succeeds
+    where a 5 s one fails.
+
+    This is the regression the whole change targets: a long nightly write held
+    against wildlife.db no longer fails a concurrent review save with
+    'database is locked'."""
+    p = _make_db(tmp_path / "hoseint.db")
+    held, release = threading.Event(), threading.Event()
+    blocker = threading.Thread(target=_hold_exclusive_unblocked, args=(p, held, release))
+    blocker.start()
+    try:
+        assert held.wait(5)
+        threading.Timer(6, release.set).start()
+        writer = fsio.connect_rw(p)
+        writer.execute("INSERT INTO t VALUES ('b', 2)")
+        writer.commit()
+        writer.close()
+    finally:
+        release.set()
+        blocker.join()
+    probe = sqlite3.connect(str(p))
+    assert probe.execute("SELECT v FROM t WHERE k='b'").fetchone()[0] == 2
+    probe.close()
+
+
+# A bare sqlite3.connect( gets sqlite3's 5 s default timeout, which is the bug
+# this consolidation removes. Only the openers themselves may call it: fsio
+# (connect_ro at 5 s, connect_rw at 30 s), db.py and camera_names.py (both
+# 30 s). Everything else in app.py, src/ and scripts/ goes through fsio. Tests
+# open throwaway tmp_path DBs, so they are out of scope.
+_SCOPE = ("app.py", "src", "scripts")
+_ALLOWLIST = {
+    "src/hoseid/fsio.py",
+    "src/hoseid/db.py",
+    "src/hoseid/camera_names.py",
+}
+
+
+def test_no_bare_sqlite_connect_outside_allowlist():
+    """No bare sqlite3.connect( in app.py/src/scripts: writers go through
+    fsio.connect_rw (30 s) and readers through fsio.connect_ro."""
+    repo = Path(__file__).resolve().parents[1]
+    hit = []
+    for scope in _SCOPE:
+        root = repo / scope
+        if not root.exists():
+            continue
+        for py in root.rglob("*.py"):
+            if any(part == ".venv" for part in py.parts):
+                continue
+            rel = py.relative_to(repo).as_posix()
+            if rel in _ALLOWLIST:
+                continue
+            if "sqlite3.connect(" in py.read_text():
+                hit.append(rel)
+    assert not hit, f"bare sqlite3.connect( outside the allowlist: {hit}"
