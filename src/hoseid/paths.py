@@ -81,6 +81,16 @@ def runs_dir() -> Path:
     return derived_dir() / "runs"
 
 
+def nightly_status_file() -> Path:
+    """One JSON file describing the last nightly pass: start/end time, exit
+    status and per-step exit codes, written atomically by
+    scripts/nightly_status.py. A reader (hoseserv's System page) reads it back
+    and reports when it failed or when the last run is stale. Not tracked in
+    git -- it is a runtime status file, not source; it is written fresh each
+    run and is only meaningful for the run that produced it."""
+    return derived_dir() / "nightly_status.json"
+
+
 # --- tag store (separate; the pipeline never writes here) --------------------
 def tags_dir() -> Path:
     return root() / "tags"
