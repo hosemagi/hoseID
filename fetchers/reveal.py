@@ -24,6 +24,7 @@ from hoseid.fsio import atomic_write_text  # noqa: E402
 from hoseid.landing import ImmutabilityError  # noqa: E402
 from hoseid.site import TZ as PROPERTY_TZ  # noqa: E402
 from hoseid.station_renames import normalize_station  # noqa: E402
+from hoseid.stations import load_overrides, resolve_station  # noqa: E402
 
 COGNITO = "https://cognito-idp.us-east-1.amazonaws.com/"
 CLIENT_ID = "6r9tpojvgvkci5trla0ip14mon"
@@ -109,15 +110,32 @@ def _conditions(item: dict) -> dict:
     }
 
 
-def _note_health(readings: dict, item: dict, conditions: dict) -> None:
-    """Keep the newest battery/signal reading per (renamed) station. Newest
-    by capture time, not fetch order: Reveal re-serves old photos with their
-    old telemetry."""
+def _health_overrides() -> list:
+    """station_overrides.json for naming health readings; [] if unreadable
+    (health then falls back to the renamed vendor label, as before)."""
+    try:
+        return load_overrides()
+    except (OSError, ValueError, KeyError) as e:
+        log(f"reveal: station overrides unreadable for health ({type(e).__name__}); "
+            "using vendor labels")
+        return []
+
+
+def _note_health(readings: dict, item: dict, conditions: dict,
+                 overrides: list | None = None) -> None:
+    """Keep the newest battery/signal reading per station, named the way
+    captures are: the station override for this camera serial first (as
+    stages/detect.py applies it), then the rename rules. Without the override
+    a camera whose Reveal label differs from its station name (North Entrance
+    -> North Entry) reported health under a name nothing else uses. Newest by
+    capture time, not fetch order: Reveal re-serves old photos with their old
+    telemetry."""
     if conditions["battery_pct"] is None and conditions["signal_bars"] is None:
         return
     when = _capture_time(item)
-    station = normalize_station(item.get("cameraName") or "unknown",
-                                when.date().isoformat())
+    label, _ = resolve_station(item.get("cameraName") or "unknown", item.get("cameraId"),
+                               when, overrides or [])
+    station = normalize_station(label, when.date().isoformat())
     prev = readings.get(station)
     if prev is None or when > prev["when"]:
         readings[station] = {**conditions, "when": when}
@@ -231,10 +249,11 @@ def poll(client: RevealClient, state: State) -> list[str]:
     conflicts = 0
     new_assets: list[str] = []
     readings: dict[str, dict] = {}
+    overrides = _health_overrides() if new_items else []
     for item in sorted(new_items, key=lambda p: p["createdTimestamp"]):
         pid = item["photoId"]
         conditions = _conditions(item)
-        _note_health(readings, item, conditions)
+        _note_health(readings, item, conditions, overrides)
         tmp = download(item["photoUrl"], TMP_DIR / pid)
         sidecar = dict(
             media_type="image",

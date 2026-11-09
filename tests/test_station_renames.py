@@ -35,6 +35,10 @@ TABLE = [
     ("CB5", "2026-09-01", "Enchanted Forest"),
     ("South Clearing", "2026-09-01", "Lost Woods"),
     ("Storm Oak", "2026-09-01", "Storm Oak"),
+    # two cameras, one bench: the Arlo keeps its own station (2026-11-09)
+    ("Cabin - Bench", "2026-09-01", "Bench (Arlo)"),
+    ("Cabin - Bench", None, "Bench (Arlo)"),
+    ("Bench", "2026-09-01", "Bench"),
     ("Nowhere Cam", "2026-09-01", "Nowhere Cam"),
 ]
 

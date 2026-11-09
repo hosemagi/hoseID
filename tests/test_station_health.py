@@ -121,6 +121,27 @@ def test_renamed_station_uses_new_name(health):
     assert set(health.read()["stations"]) == {"Cabin Yard", "Enchanted Forest"}
 
 
+def test_station_override_names_health_like_captures(health):
+    """A Reveal label that differs from the station name (the camera says
+    North Entrance, the station is North Entry) is mapped by the serial's
+    override, the same way captures are, not left under the vendor label."""
+    health.path.parent.mkdir(parents=True, exist_ok=True)
+    (health.path.parent / "station_overrides.json").write_text(json.dumps({"overrides": [
+        {"device_id": "dev-North Entrance", "start": "2020-01-01T00:00:00Z",
+         "end": "2099-01-01T00:00:00Z", "station": "North Entry"}]}))
+    reveal.poll(Client([item(1, "North Entrance", "10302026100000"),
+                        item(2, "CB5", "10302026100000")]), State())
+    assert set(health.read()["stations"]) == {"North Entry", "Enchanted Forest"}
+
+
+def test_unreadable_overrides_fall_back_to_vendor_label(health):
+    health.path.parent.mkdir(parents=True, exist_ok=True)
+    (health.path.parent / "station_overrides.json").write_text("{not json")
+    reveal.poll(Client([item(1, "North Entrance", "10302026100000")]), State())
+    assert set(health.read()["stations"]) == {"North Entrance"}
+    assert any("overrides unreadable" in line for line in health.lines)
+
+
 def test_conflict_skips_still_record_health(health, monkeypatch):
     def conflict(tmp, sc):
         raise reveal.ImmutabilityError("conflicting sidecar")

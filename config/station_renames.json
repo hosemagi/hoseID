@@ -14,6 +14,12 @@
       "before": "Madrone (old spot)",
       "after": "Madrone",
       "cutoff": "2026-07-25"
+    },
+    {
+      "name": "Cabin - Bench",
+      "before": "Bench (Arlo)",
+      "after": "Bench (Arlo)",
+      "cutoff": "2000-01-01"
     }
   ]
 }
