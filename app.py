@@ -32,15 +32,17 @@ Exclusion zones are the ONE lossy layer in the pipeline, so they carry guards:
 """
 
 import json
+import logging
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -229,6 +231,59 @@ def all_images() -> dict:
     """asset_id -> capture record. The pipeline is the only source of captures."""
     return pipeline_images()
 
+
+# The stack panel probes GET /health every few seconds and uvicorn logs every
+# one at INFO, so the log was mostly probe lines. _QuietHealth drops only the
+# successful health poll; failures and every other path are kept. Installed at
+# module import: uvicorn reads the logger config when it starts, so the filter
+# must already be attached by then. It is idempotent, so importing twice does not
+# stack filters.
+_HEALTH_PATH = "/health"
+
+
+class _QuietHealth(logging.Filter):
+    """Drop uvicorn access lines for successful health polls, keeping only the
+    time of the newest one (O(1), in `last_ok`). The first success after start
+    or after a failure is kept, so the log shows when health came up. The first
+    failure after a run of successes is preceded by a uvicorn.error line naming
+    the last successful probe. Failures and every other path are kept.
+    uvicorn's record.args are (client, method, path, http_version, status)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_ok: float | None = None  # record.created of the newest 2xx probe
+        self.failing = True  # until the first success, and after each failure
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not (isinstance(args, tuple) and len(args) == 5):
+            return True
+        path, status = args[2], args[4]
+        if str(path).split("?", 1)[0] != _HEALTH_PATH:
+            return True
+        if isinstance(status, int) and 200 <= status < 300:
+            keep = self.failing
+            self.failing = False
+            self.last_ok = record.created
+            return keep
+        if not self.failing and self.last_ok is not None:
+            logging.getLogger("uvicorn.error").warning(
+                "%s probe failed (status %s); last successful probe at %s",
+                _HEALTH_PATH, status,
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_ok)),
+            )
+        self.failing = True
+        return True
+
+
+def _install_access_filter() -> None:
+    """Attach _QuietHealth to uvicorn.access once. Idempotent."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(type(f).__name__ == _QuietHealth.__name__ for f in access.filters):
+        access.addFilter(_QuietHealth())
+
+
+_install_access_filter()
 
 init_db()
 
@@ -661,6 +716,38 @@ def sync_wildlife():
             continue
         output.append(r.stdout.strip())
     return {"ok": True, "output": output}
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    """Liveness for hoseserv's stack panel. A 200 means the review DB (tags.db)
+    opens read-only and its reviews can be read, not just that the static UI is
+    served. queue_depth is the number of distinct captures with no review
+    (captures minus reviewed, by asset_id; captures holds one row per capture
+    per run, so it is de-duplicated). A missing detections DB is a queue of 0,
+    the same empty state pipeline_images() reports. Any sqlite/OS error on
+    either DB is a 503. Deliberately not all_images(): that globs the assets
+    directory for every capture."""
+    where = "tags.db"
+    try:
+        conn = fsio.connect_ro(DB_PATH, row_factory=True)
+        try:
+            reviewed = set(latest_reviews(conn))
+        finally:
+            conn.close()
+        captures: set[str] = set()
+        if DETECTIONS_DB.exists():
+            where = "detections.db"
+            conn = fsio.connect_ro(DETECTIONS_DB)
+            try:
+                captures = {r[0] for r in conn.execute(
+                    "SELECT DISTINCT asset_id FROM captures")}
+            finally:
+                conn.close()
+    except (sqlite3.Error, OSError) as e:
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": f"{where}: {e}"})
+    return JSONResponse({"ok": True, "queue_depth": len(captures - reviewed)})
 
 
 @app.get("/images/{rel:path}")
