@@ -48,7 +48,7 @@ from pydantic import BaseModel
 
 # this repo's src: the megadetector venv has no hoseid install
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from hoseid import fsio
+from hoseid import fsio, zones as zone_rule
 from hoseid.schema import (
     EXCLUSION_ZONES_COLUMNS,
     REVIEWS_COLUMNS,
@@ -159,7 +159,7 @@ def init_db():
 # --- pipeline captures (fetch daemon -> landing zone -> nightly hoseid run) ---
 # Read live from detections.db, cached on its mtime, so new nightly output
 # appears in the review queue without an app restart.
-_CAT_CODE = {"animal": "1", "person": "2", "vehicle": "3"}
+_CAT_CODE = zone_rule.CAT_CODE
 _pipeline_cache = {"mtime": None, "items": {}}
 
 
@@ -309,21 +309,8 @@ def current_epoch(conn, device_id):
 
 
 def active_zones(conn, device_id=None):
-    """Zones belonging to each device's current epoch."""
-    zones = [dict(r) for r in conn.execute(
-        "SELECT * FROM exclusion_zones" +
-        (" WHERE device_id=?" if device_id else ""),
-        (device_id,) if device_id else (),
-    )]
-    epochs = {}
-    out = []
-    for z in zones:
-        d = z["device_id"]
-        if d not in epochs:
-            epochs[d] = current_epoch(conn, d)
-        if z["epoch"] == epochs[d]:
-            out.append(z)
-    return out
+    """Zones belonging to each device's current epoch (hoseid.zones)."""
+    return zone_rule.active_zones(conn, device_id)
 
 
 def latest_reviews(conn):
@@ -357,15 +344,10 @@ def _union(a, b):
 
 
 def _excluded(det, zones):
-    """Center test: a detection is excluded when its center falls inside an
-    active zone of the same category."""
-    x, y, w, h = det["bbox"]
-    cx, cy = x + w / 2, y + h / 2
-    return any(
-        z["category"] == det["category"]
-        and z["x"] <= cx <= z["x"] + z["w"] and z["y"] <= cy <= z["y"] + z["h"]
-        for z in zones
-    )
+    """Center test (hoseid.zones.in_zone): a detection is excluded when its
+    center falls inside an active zone of the same category. Callers pass one
+    device's zones, so the device check is skipped."""
+    return zone_rule.in_zone(det["bbox"], det["category"], zone_rule.ANY_DEVICE, zones)
 
 
 class ReviewIn(BaseModel):

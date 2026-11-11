@@ -43,7 +43,7 @@ import urllib3
 
 from .common import (DEFAULT_WEBHOOK, State, hoseflow_results, log, notify,
                      notifications_sent, post_to_hoseflow)
-from hoseid import fsio  # noqa: E402 (sys.path set by .common)
+from hoseid import fsio, zones  # noqa: E402 (sys.path set by .common)
 from hoseid.site import TZ as LOCAL_TZ  # noqa: E402 (sys.path set by .common)
 
 REPO = Path(__file__).resolve().parents[1]
@@ -145,32 +145,25 @@ def capture_buck_prob(conn, asset_id: str, run_id: str) -> float | None:
     return row[0] if row else None
 
 
+# Thin wrappers over hoseid.zones (the one copy of the rule, shared with the
+# review UI); kept by name because the tests monkeypatch them.
 def _active_zones() -> list[dict]:
     if not TAGS_DB.exists():
         return []
     conn = fsio.connect_ro(TAGS_DB, row_factory=True)
-    epochs = {r["device_id"]: r["e"] for r in conn.execute(
-        "SELECT device_id, MAX(epoch) e FROM camera_epochs GROUP BY device_id")}
-    zones = [dict(r) for r in conn.execute("SELECT * FROM exclusion_zones")
-             if r["epoch"] == epochs.get(r["device_id"], 1)]
-    conn.close()
-    return zones
+    try:
+        return zones.active_zones(conn)
+    finally:
+        conn.close()
 
 
-def _in_zone(det, device_id, zones) -> bool:
-    x, y, w, h = det["bbox_x"], det["bbox_y"], det["bbox_w"], det["bbox_h"]
-    cx, cy = x + w / 2, y + h / 2
-    cat = {"animal": "1", "person": "2", "vehicle": "3"}.get(det["detector_class"])
-    return any(z["device_id"] == device_id and z["category"] == cat
-               and z["x"] <= cx <= z["x"] + z["w"]
-               and z["y"] <= cy <= z["y"] + z["h"] for z in zones)
+def _in_zone(det, device_id, active) -> bool:
+    bbox = (det["bbox_x"], det["bbox_y"], det["bbox_w"], det["bbox_h"])
+    return zones.in_zone(bbox, det["detector_class"], device_id, active)
 
 
 def _device_for(digest: str) -> str | None:
-    p = Path.home() / "trailcam/landing/sidecars" / digest[:2] / digest[2:4] / f"{digest}.json"
-    if p.exists():
-        return json.loads(p.read_text()).get("device_id")
-    return None
+    return zones.device_for(digest)
 
 
 def _alert_image(det, digest) -> Path | None:
@@ -271,7 +264,7 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
     if not asset_ids:
         return 0
     conn = fsio.connect_ro(DETECTIONS_DB, row_factory=True)
-    zones = _active_zones()
+    active = _active_zones()
     sent = 0
     failed: list[dict] = []
 
@@ -289,7 +282,7 @@ def check_and_alert(cfg_all: dict, state: State, asset_ids: list[str]) -> int:
         for det in conn.execute(
                 "SELECT * FROM detections WHERE asset_id=? AND run_id=?",
                 (asset_id, cap["run_id"])):
-            if _in_zone(det, device, zones):
+            if _in_zone(det, device, active):
                 continue
             event = build_event(det, cap, device, _alert_image(det, digest), buck_prob, thr)
             response = _post_event(cfg, event)
