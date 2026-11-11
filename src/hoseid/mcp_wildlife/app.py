@@ -22,7 +22,6 @@ Environment:
     HOSEID_REVIEW_URL        review-app base for review_url (default http://localhost:8870)
     SITE_LAT / SITE_LON      property coords for sunrise, as in hoseserv
                              (default: stations.json, then Storm Oak)
-    WILDLIFE_LAT / WILDLIFE_LON   deprecated alias, used only when SITE_* is unset
     HOSEID_ROOT              default ~/trailcam
 """
 from __future__ import annotations

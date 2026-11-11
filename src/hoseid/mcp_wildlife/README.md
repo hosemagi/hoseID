@@ -98,6 +98,5 @@ anything else is reported in the manifest with the reason, never as bytes.
 `WILDLIFE_MCP_TLS` (0) · `WILDLIFE_MCP_CERTFILE`/`WILDLIFE_MCP_KEYFILE` · `WILDLIFE_MCP_SAN_EXTRA` ·
 `SITE_LAT`/`SITE_LON` (property coords for sunrise, the same variables hoseserv reads; default:
 first station with coords in stations.json, then Storm Oak; set them in the plist's
-`EnvironmentVariables`) · `WILDLIFE_LAT`/`WILDLIFE_LON` (deprecated alias, used only when `SITE_*`
-is unset, warns once on stderr) · `HOSEID_REVIEW_URL`
+`EnvironmentVariables`) · `HOSEID_REVIEW_URL`
 (http://localhost:8870) · `HOSEID_ROOT` (~/trailcam)

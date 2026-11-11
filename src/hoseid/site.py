@@ -33,7 +33,6 @@ _TZ_WARNED: set[str] = set()
 # Storm Oak, the same default hoseserv's app.utils.site_coords falls back to.
 STORM_OAK_LAT, STORM_OAK_LON = 39.32097, -120.97152
 _COORDS_DEFAULT_LOGGED = False
-_WILDLIFE_WARNED = False
 
 
 def site_tz() -> ZoneInfo:
@@ -70,26 +69,16 @@ def site_coords() -> tuple[float, float, str]:
     """(lat, lon, source) of the site, first match wins:
 
     1. SITE_LAT / SITE_LON (hoseserv's variables).
-    2. WILDLIFE_LAT / WILDLIFE_LON: deprecated alias, kept for one release;
-       one stderr line per process when used.
-    3. The first station in stations.json with usable coordinates.
-    4. Storm Oak (one stderr line per process).
+    2. The first station in stations.json with usable coordinates.
+    3. Storm Oak (one stderr line per process).
 
     A pair counts only when both halves parse and are in range (lat -90..90,
     lon -180..180); anything else falls through to the next step. Never raises.
     """
-    global _WILDLIFE_WARNED, _COORDS_DEFAULT_LOGGED
+    global _COORDS_DEFAULT_LOGGED
     pt = _env_point("SITE_LAT", "SITE_LON")
     if pt:
         return pt[0], pt[1], "env SITE_LAT/SITE_LON"
-
-    pt = _env_point("WILDLIFE_LAT", "WILDLIFE_LON")
-    if pt:
-        if not _WILDLIFE_WARNED:
-            _WILDLIFE_WARNED = True
-            print("hoseid: WILDLIFE_LAT/WILDLIFE_LON are deprecated; "
-                  "set SITE_LAT/SITE_LON instead", file=sys.stderr)
-        return pt[0], pt[1], "env WILDLIFE_LAT/LON (deprecated)"
 
     try:
         reg = json.loads(paths.stations_file().read_text())

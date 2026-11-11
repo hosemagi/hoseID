@@ -99,11 +99,10 @@
   each service's EnvironmentVariables and restart them.
 - The site's coordinates come from `hoseid.site.site_coords()` -> (lat, lon,
   source): `SITE_LAT`/`SITE_LON` (the same variables as hoseserv's
-  `app.utils.site_coords`), else `WILDLIFE_LAT`/`WILDLIFE_LON` (deprecated
-  alias, one stderr line per process, drop after one release), else the first
-  stations.json entry with coordinates, else Storm Oak. Never hard-code the
-  point elsewhere. It is read from the process env, so a service only sees it
-  if its plist's EnvironmentVariables set it (none do today).
+  `app.utils.site_coords`), else the first stations.json entry with
+  coordinates, else Storm Oak. Never hard-code the point elsewhere. It is
+  read from the process env, so a service only sees it if its plist's
+  EnvironmentVariables set it (none do today).
 - pipeline cache in app.py is keyed by file mtime; reset it directly in
   tests rather than touching files.
 - detect.py keeps ONE best frame per video clip; all detections of a

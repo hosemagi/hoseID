@@ -8,8 +8,8 @@ one behind most "NOAA-style" calculators; accurate to a minute or two here,
 which is well inside the camera-clock jitter.
 
 Coordinates come from hoseid.site.site_coords(): SITE_LAT/SITE_LON (as in
-hoseserv), else the deprecated WILDLIFE_LAT/WILDLIFE_LON alias, else the first
-station in landing/stations.json with coordinates, else Storm Oak.
+hoseserv), else the first station in landing/stations.json with coordinates,
+else Storm Oak.
 """
 from __future__ import annotations
 

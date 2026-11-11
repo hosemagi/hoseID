@@ -78,10 +78,8 @@ def _media(*paths_kinds):
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     monkeypatch.setenv("HOSEID_ROOT", str(tmp_path))
-    monkeypatch.delenv("SITE_LAT", raising=False)
-    monkeypatch.delenv("SITE_LON", raising=False)
-    monkeypatch.setenv("WILDLIFE_LAT", str(LAT))
-    monkeypatch.setenv("WILDLIFE_LON", str(LON))
+    monkeypatch.setenv("SITE_LAT", str(LAT))
+    monkeypatch.setenv("SITE_LON", str(LON))
     paths.ensure_layout()
     img1 = paths.assets_dir() / "ab" / "cd" / "abcd1.jpg"; _jpeg(img1)
     img2 = paths.assets_dir() / "ab" / "ce" / "abce2.jpg"; _jpeg(img2, (800, 1600))

@@ -1,7 +1,7 @@
 """hoseid.site.site_coords(): one site point from SITE_LAT/SITE_LON (the
-variables hoseserv's app.utils.site_coords reads), then the deprecated
-WILDLIFE_LAT/LON alias, then the first stations.json entry with coordinates,
-then Storm Oak. Bad values fall through; nothing raises.
+variables hoseserv's app.utils.site_coords reads), then the first
+stations.json entry with coordinates, then Storm Oak. Bad values fall through;
+nothing raises.
 
 Stdlib-only so it runs in every venv. stations.json lives under a tmp
 HOSEID_ROOT; the once-per-process stderr flags are reset per test."""
@@ -13,16 +13,14 @@ from hoseid import site
 
 STORM_OAK = (39.32097, -120.97152, "fallback (Storm Oak)")
 SITE = (39.0, -121.0, "env SITE_LAT/SITE_LON")
-ALIAS = (39.3, -121.1, "env WILDLIFE_LAT/LON (deprecated)")
 BENCH = (39.5, -121.2, "stations.json:Bench")
 
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch, tmp_path):
-    for k in ("SITE_LAT", "SITE_LON", "WILDLIFE_LAT", "WILDLIFE_LON"):
+    for k in ("SITE_LAT", "SITE_LON"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("HOSEID_ROOT", str(tmp_path))   # no stations.json yet
-    monkeypatch.setattr(site, "_WILDLIFE_WARNED", False)
     monkeypatch.setattr(site, "_COORDS_DEFAULT_LOGGED", False)
 
 
@@ -38,25 +36,15 @@ def _site(mp, lat="39.0", lon="-121.0"):
     mp.setenv("SITE_LON", lon)
 
 
-def _alias(mp, lat="39.3", lon="-121.1"):
-    mp.setenv("WILDLIFE_LAT", lat)
-    mp.setenv("WILDLIFE_LON", lon)
-
-
 def _bench(tmp_path):
     _stations(tmp_path, [{"name": "Bench", "lat": 39.5, "lon": -121.2}])
 
 
-# ── precedence: SITE_* > alias > stations.json > Storm Oak ───────────────
+# ── precedence: SITE_* > stations.json > Storm Oak ────────────────────────
 
 def test_site_wins_over_everything(monkeypatch, tmp_path):
-    _site(monkeypatch); _alias(monkeypatch); _bench(tmp_path)
+    _site(monkeypatch); _bench(tmp_path)
     assert site.site_coords() == SITE
-
-
-def test_alias_wins_over_stations(monkeypatch, tmp_path):
-    _alias(monkeypatch); _bench(tmp_path)
-    assert site.site_coords() == ALIAS
 
 
 def test_stations_used_when_env_unset(tmp_path):
@@ -71,15 +59,8 @@ def test_storm_oak_when_nothing_set(capsys):
     assert err.count("Storm Oak") == 1
 
 
-def test_alias_warns_once_on_stderr(monkeypatch, capsys):
-    _alias(monkeypatch)
-    site.site_coords(); site.site_coords()
-    err = capsys.readouterr().err
-    assert err.count("WILDLIFE_LAT/WILDLIFE_LON are deprecated") == 1
-
-
-def test_site_does_not_warn(monkeypatch, capsys):
-    _site(monkeypatch); _alias(monkeypatch)
+def test_site_does_not_warn(monkeypatch, tmp_path, capsys):
+    _site(monkeypatch); _bench(tmp_path)
     site.site_coords()
     assert capsys.readouterr().err == ""
 
@@ -92,19 +73,13 @@ def test_site_does_not_warn(monkeypatch, capsys):
     ("500", "-121.0"),            # lat out of range
     ("39.0", "-200"),             # lon out of range
 ])
-def test_bad_site_falls_to_alias(monkeypatch, lat, lon):
-    _site(monkeypatch, lat, lon); _alias(monkeypatch)
-    assert site.site_coords() == ALIAS
+def test_bad_site_falls_to_stations(monkeypatch, tmp_path, lat, lon):
+    _site(monkeypatch, lat, lon); _bench(tmp_path)
+    assert site.site_coords() == BENCH
 
 
 def test_half_set_site_falls_through(monkeypatch, tmp_path):
     monkeypatch.setenv("SITE_LAT", "39.0")
-    _bench(tmp_path)
-    assert site.site_coords() == BENCH
-
-
-def test_bad_alias_falls_to_stations(monkeypatch, tmp_path):
-    _alias(monkeypatch, lat="north")
     _bench(tmp_path)
     assert site.site_coords() == BENCH
 
@@ -128,7 +103,7 @@ def test_corrupt_stations_falls_to_storm_oak(tmp_path, raw):
 
 # ── the wildlife MCP's sun follows it ─────────────────────────────────────
 
-def test_property_coords_is_site_coords(monkeypatch):
+def test_property_coords_is_site_coords(monkeypatch, tmp_path):
     solar = pytest.importorskip("hoseid.mcp_wildlife.solar")
-    _site(monkeypatch); _alias(monkeypatch)
+    _site(monkeypatch); _bench(tmp_path)
     assert solar.property_coords() == SITE
