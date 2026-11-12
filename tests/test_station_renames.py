@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from hoseid import station_renames
+
 ROOT = Path(__file__).resolve().parents[1]
 RULES_FILE = ROOT / "config" / "station_renames.json"
 
@@ -116,6 +118,41 @@ def test_explicit_rules_override_the_file():
     assert n("Cabin - X", "2026-01-01", rules) == "A"
     assert n("Cabin - X", "2026-01-02", rules) == "B"
     assert n("CB5", None, rules) == "CB5"
+
+
+# --- one shared case table ------------------------------------------------
+# config/station_renames_cases.json: the station cases that are hard to get
+# right (date splits, strip_prefix, a plain rename, an unknown passing through,
+# a null date) with the rules they run against. hoseint
+# tests/test_prepare_sightings.py and hoseserv tests/test_security.py run the
+# same rows through their own copies (reading ~/projects/hoseID/config/...);
+# here it runs through the real hoseid.station_renames module, not the sync
+# script.
+CASES_FILE = ROOT / "config" / "station_renames_cases.json"
+
+
+def _load_cases(path):
+    data = json.loads(path.read_text())
+    assert set(data) == {"rules", "cases"}, data
+    assert set(data["rules"]) == {"renames", "strip_prefix", "special"}
+    for case in data["cases"]:
+        assert set(case) == {"name", "date", "expected"}, case
+    return data["rules"], [(c["name"], c["date"], c["expected"]) for c in data["cases"]]
+
+
+CASE_RULES, CASES = _load_cases(CASES_FILE)
+
+
+@pytest.mark.parametrize("name,date,expected", CASES)
+def test_case_file_matches_normalize_station(name, date, expected):
+    assert station_renames.normalize_station(name, date, rules=CASE_RULES) == expected
+
+
+def test_case_file_rules_are_still_in_the_real_file():
+    real = json.loads(RULES_FILE.read_text())
+    assert real["strip_prefix"] == CASE_RULES["strip_prefix"]
+    assert CASE_RULES["renames"].items() <= real["renames"].items()
+    assert all(s in real["special"] for s in CASE_RULES["special"])
 
 
 # --- end-to-end sync: a blank station never writes "" -------------------------

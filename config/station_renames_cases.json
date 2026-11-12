@@ -1,0 +1,99 @@
+{
+  "rules": {
+    "renames": {
+      "Yard": "Cabin Yard",
+      "South Clearing": "Lost Woods",
+      "CB5": "Enchanted Forest",
+      "CB6": "Cliffside",
+      "CB7": "Trailer Path",
+      "CB8": "North Entry"
+    },
+    "strip_prefix": "Cabin - ",
+    "special": [
+      {
+        "name": "Cabin - Madrone",
+        "before": "Madrone (old spot)",
+        "after": "Madrone",
+        "cutoff": "2026-07-25"
+      },
+      {
+        "name": "Cabin - Bench",
+        "before": "Bench (Arlo)",
+        "after": "Bench (Arlo)",
+        "cutoff": "2000-01-01"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "Cabin - Madrone",
+      "date": "2026-07-24",
+      "expected": "Madrone (old spot)"
+    },
+    {
+      "name": "Cabin - Madrone",
+      "date": "2026-07-25",
+      "expected": "Madrone"
+    },
+    {
+      "name": "Cabin - Madrone",
+      "date": null,
+      "expected": "Madrone"
+    },
+    {
+      "name": "Madrone",
+      "date": "2026-11-09",
+      "expected": "Madrone"
+    },
+    {
+      "name": "Cabin - Bench",
+      "date": "2026-09-01",
+      "expected": "Bench (Arlo)"
+    },
+    {
+      "name": "Cabin - Bench",
+      "date": null,
+      "expected": "Bench (Arlo)"
+    },
+    {
+      "name": "Bench",
+      "date": "2026-09-01",
+      "expected": "Bench"
+    },
+    {
+      "name": "Cabin - Crossroads",
+      "date": "2026-09-01",
+      "expected": "Crossroads"
+    },
+    {
+      "name": "Cabin - Trailer",
+      "date": "2026-11-09",
+      "expected": "Trailer"
+    },
+    {
+      "name": "Cabin - Yard",
+      "date": "2026-09-01",
+      "expected": "Cabin Yard"
+    },
+    {
+      "name": "CB5",
+      "date": "2026-09-01",
+      "expected": "Enchanted Forest"
+    },
+    {
+      "name": "South Clearing",
+      "date": "2026-09-01",
+      "expected": "Lost Woods"
+    },
+    {
+      "name": "Storm Oak",
+      "date": "2026-09-01",
+      "expected": "Storm Oak"
+    },
+    {
+      "name": "Nowhere Cam",
+      "date": "2026-09-01",
+      "expected": "Nowhere Cam"
+    }
+  ]
+}
