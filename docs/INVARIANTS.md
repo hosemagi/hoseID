@@ -32,7 +32,7 @@ refused.
 Any analysis output can be deleted and rebuilt from the landing zone. Every derived record
 carries `run_id`, the model identities, and a version for whatever produced it.
 
-*Enforced:* `migrations/001_detections.sql` — the `runs` table records detector model+version,
+*Enforced:* `migrations/detections/001_init.sql` — the `runs` table records detector model+version,
 classifier model+version, geofence, threshold and taxon-map version; `captures` and `detections`
 are keyed by `run_id` and cascade on delete.
 
@@ -67,6 +67,11 @@ reach P.
 predicate. There is deliberately no `species=` parameter on the alert path. Geofence roll-ups
 that could conceal a lion (`unknown_felid`, `unknown_carnivore`) are pinned to `always_high` in
 `config/taxon_map.json`.
+
+*Amended 2026-10-26 — paging moved out of hoseID.* `fetchers/alerts.py` forwards every
+detection outside a review exclusion zone to hoseserv's hoseflow webhook without a species
+filter; which taxa page, at what threshold and priority, is decided by the hoseflow `wildlife-*`
+rules. The invariant binds hoseID's side: nothing may be dropped by species before the POST.
 
 *Tests:* `test_every_animal_detection_is_alertable_regardless_of_taxon`,
 `test_a_misclassified_lion_still_reaches_review`, `test_family_rollup_of_cat_is_high_priority`.

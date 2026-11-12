@@ -9,10 +9,18 @@ queue when they come.
 ```
 .venv/bin/pip install -e '.[mcp]'            # main venv only (mcp<2 pinned)
 .venv/bin/python -m hoseid.mcp_wildlife.app  # http://localhost:8853/mcp
-cp config/com.hoseid.wildlife-mcp.plist ~/Library/LaunchAgents/ && \
-  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hoseid.wildlife-mcp.plist
 claude mcp add --transport http wildlife http://localhost:8853/mcp
 ```
+
+On nvlm it runs as the LaunchDaemon `com.hoseid.wildlife-mcp` (installed in
+`/Library/LaunchDaemons` with `UserName` hosebot; `config/com.hoseid.wildlife-mcp.plist` is the
+template and has no `UserName`, so don't install it verbatim). Log
+`~/logs/hoseid-wildlife-mcp.log`; restart with
+`sudo launchctl kickstart -k system/com.hoseid.wildlife-mcp`.
+
+`GET /health` returns `{"ok": true}` with no MCP session (hoseserv's Stack panel probes it;
+successful probes are dropped from the access log). `GET /mcp` answers 405 (`Allow: POST,
+DELETE`) instead of holding an idle SSE stream.
 
 ## Design rules
 
@@ -43,14 +51,15 @@ claude mcp add --transport http wildlife http://localhost:8853/mcp
 | `get_individuals` | registry + `id_basis` + stations + `sightings_by_confidence` + `reference_frames` + `reference_frames_stale` with reason |
 | `get_claims` | claims with `do_not_reraise` flag; optional `status[]` |
 | `get_open_items` | open items; optional `status[]` |
-| `get_stations` | registry + activity + top species; `unmapped: true` for stations with no registry entry (CB5–CB8) |
+| `get_stations` | registry + activity + top species; `unmapped: true` for stations that appear in sightings but have no registry row (listed in `unmapped_stations`) |
 | `get_schema` | vocabularies in use with counts + `vocabulary_issues` (fox/gray_fox split, category-as-species, other-animal duplicates, blank station) |
 
 Filters for `query_sightings`: `start_date`/`end_date` · `species`, `station` (aliases resolve),
 `individual`, `category`, `source`, `confidence` (lists or comma strings, case-insensitive) ·
 `time_of_day` (night 22–04 / morning 05–11 / midday 12–16 / evening 17–21, same buckets as
 Sage's `wildlife_query`) · `hour_from`/`hour_to` (wraps midnight) · `light` · `legal_light` ·
-`auto` · `has_media`. Rows with no recorded time never match a time or light filter and are
+`auto` · `has_media` · `sex` (M / F / none; male/female and buck/doe accepted — set by hand in
+review; deer default to F unless tagged M, so a deer F means "not marked as a buck"). Rows with no recorded time never match a time or light filter and are
 reported as `untimed`.
 
 ## Reference frames
@@ -96,6 +105,7 @@ anything else is reported in the manifest with the reason, never as bytes.
 
 `WILDLIFE_MCP_HOST` (0.0.0.0) · `WILDLIFE_MCP_PORT` (8853) · `WILDLIFE_MCP_HTTP_PORT` (8854, loopback) ·
 `WILDLIFE_MCP_TLS` (0) · `WILDLIFE_MCP_CERTFILE`/`WILDLIFE_MCP_KEYFILE` · `WILDLIFE_MCP_SAN_EXTRA` ·
+`WILDLIFE_MCP_LOG_LEVEL` (INFO) · `SITE_TZ` (America/Los_Angeles) ·
 `SITE_LAT`/`SITE_LON` (property coords for sunrise, the same variables hoseserv reads; default:
 first station with coords in stations.json, then Storm Oak; set them in the plist's
 `EnvironmentVariables`) · `HOSEID_REVIEW_URL`

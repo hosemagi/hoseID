@@ -8,13 +8,16 @@ Sage integration are all downstream of this layer.
 ## Pipeline
 
 ```
-SD card / (future) Reveal + Arlo fetch      stills AND video clips
+SD card / Reveal export / fetch daemon      stills AND video clips
+(Reveal + Arlo, `fetchers/`)
         │
         ▼
   landing zone            append-only, immutable, content-addressed
         │                 a clip is ONE capture, not N frames
         │
-        ├─ stage 1: MegaDetector v1000 redwood, CPU, threshold 0.2
+        ├─ stage 1: MegaDetector v1000 redwood, threshold 0.1 as run
+        │            (`hoseid run` and nightly: CPU; real-time pass: MPS;
+        │            `stages/detect.py` alone defaults to 0.2)
         │            images: detect directly
         │            video:  sample 2 fps (≤40 frames), detect across all,
         │                    keep the single best frame by conf × bbox_area
@@ -23,6 +26,8 @@ SD card / (future) Reveal + Arlo fetch      stills AND video clips
         └─ stage 2: SpeciesNet 5.0.5, MPS, USA/CA geofence, ON CROPS
                      → taxon + confidence + review priority
         │
+        ├─ stage 3 (real-time pass only, best-effort): `stages/sex.py`
+        │            buck/doe score for new blacktail crops → `detections.buck_prob`
         ▼
   derived/                regenerable; delete and rebuild at will
   tags/                   human labels; the only irreplaceable data here
@@ -33,7 +38,64 @@ from SpeciesNet at 92.7%, direction is derivable from bbox movement across a bur
 remaining attributes were never measured and are better covered by P's own tagging. See
 `~/.claude/scratch/spike/vision-model-findings.md` for the measurement record.
 
-Camera renamed or moved? Follow `docs/CAMERA_RENAMES.md` — station names live in five places.
+Camera renamed or moved? Follow `docs/CAMERA_RENAMES.md` — station names live in several
+layers. Arlo renames are followed automatically by device id; Reveal renames are by hand.
+
+## Services on nvlm
+
+All five are LaunchDaemons running as `hosebot`; the plists in `config/` are the templates.
+
+| label | runs | schedule / port | log |
+|---|---|---|---|
+| `com.hoseid.fetch` | `.venv-fetch/bin/python -m fetchers.daemon` | KeepAlive; Reveal poll every 300 s, Arlo sweep on media events and every 900 s | `~/logs/hoseid-fetch.log` |
+| `com.hoseid.review` | `~/venvs/megadetector/bin/uvicorn app:app` | KeepAlive; port 8870 | `~/logs/hoseid-review.log` |
+| `com.hoseid.nightly` | `scripts/nightly.sh` | daily 02:30 | `~/logs/hoseid-nightly.log` |
+| `com.hoseid.wildlife-mcp` | `.venv/bin/python -m hoseid.mcp_wildlife.app` | KeepAlive; port 8853 | `~/logs/hoseid-wildlife-mcp.log` |
+| `com.hoseid.sex-retrain` | `training/sex/retrain.sh` | 1st of the month 03:40 | `~/logs/hoseid-sex-retrain.log` |
+
+**Fetch daemon** (`fetchers/`). Polls the Reveal cloud and sweeps the Arlo library, lands new
+captures, then runs the same detect + classify pass as the nightly (run id `nightly`, serialized
+by `derived/.pipeline.lock`) on the fresh assets. Credentials and intervals come from
+`~/.config/hoseid-fetch/credentials.toml`; cursors and health verdicts live in
+`derived/fetch-state.json` (losing it only costs a re-scan). Arlo cameras whose name starts with
+`MH -` (another property) are skipped at fetch time. Reveal polls also record each camera's
+battery and signal in `landing/station_health.json` (plus a daily
+`station_health_history.jsonl`, 180 days), named by station override first, then the rename
+rules; hoseserv reads those files (hosemap trail-cam popup, battery days-left estimate).
+
+**Alerts** (`fetchers/alerts.py`). hoseID does not decide who gets paged. Every detection outside
+a review exclusion zone is POSTed, unfiltered by species (invariant 4), to hoseserv's hoseflow
+webhook `wildlife-webhook`; the hoseflow `wildlife-*` rules decide taxa, thresholds, night hours,
+priority and cooldown and deliver through hosenotify. Fetch-source outages and recoveries go to
+the `hoseid-fetch-health` webhook once per transition. Direct ntfy (`common.notify()`) carries
+no wildlife alerts; it is the operator channel that still works when hoseserv is down: three
+failed webhook batches in a row ("alerts DOWN"), a health transition hoseflow did not deliver,
+and fetch-daemon notices (an Arlo camera rename applied or refused, an empty Arlo download).
+
+**Review app** (`app.py` + `static/index.html`, port 8870). Per-capture verdicts into the
+`reviews` table of `tags/tags.db` (species tags, sex M/F, one or more `+`-joined individual or
+person names, exclusion zones, camera epochs). `/api/queue` takes `status`, `device`, `sort`
+and `since=YYYY-MM-DD` (local date; the last was added for hoseserv's camreview history).
+
+**Nightly** (`scripts/nightly.sh`). `hoseid run --run-id nightly --threshold 0.1`, then
+`sync_wildlife_log.py` (reviewed animal captures → `tags/wildlife.db` sightings),
+`weather_backfill.py`, `build_encounters.py --gap-min 90`. Each step's exit code is recorded in
+`derived/nightly_status.json` (hoseserv's System page reads it); the script exits non-zero when
+the pipeline or the log sync fails.
+
+## Stations
+
+`~/trailcam/landing/stations.json` is the registry (name, vendor, `device_id` for Reveal
+serials, position). `station_overrides.json` corrects a device's station for a date window at
+analysis time, and `config/station_renames.json` maps vendor camera labels onto log stations
+(`strip_prefix` `Cabin - `, `renames`, and `special` date splits). As of 2026-11-09:
+
+- Reveal (tactacam): Storm Oak, Lost Woods, Bench, North Oak, Enchanted Forest, Cliffside,
+  Trailer Path, North Entry.
+- Arlo: Cabin Yard, Madrone, Crossroads, Path, Garage, Driveway, Entry, Field of Sticks,
+  Orchard, Deck, Trailer, Shed, and Bench (Arlo) — the Arlo camera `Cabin - Bench` is its own
+  station, not the Reveal station Bench.
+- `Madrone (old spot)` is the Madrone camera's ground before its 2026-07-25 move.
 
 ## Wildlife MCP (read-only)
 
@@ -134,9 +196,9 @@ means a re-run, not an edit.
 
 | Path | Contents | Backup priority |
 |---|---|---|
-| `~/trailcam/landing/` | assets + sidecars, immutable | **high** — irreplaceable machine data |
-| `~/trailcam/derived/` | detections.db, crops, rollups | none — regenerable |
-| `~/trailcam/tags/` | tags.db | **highest** — irreplaceable human data |
+| `~/trailcam/landing/` | assets + sidecars, immutable; `stations.json`, `station_overrides.json`, `station_health*.json(l)` | **high** — irreplaceable machine data |
+| `~/trailcam/derived/` | detections.db, crops, encounters.db, fetch-state.json, mcp-previews, `training/sex/` | none — regenerable |
+| `~/trailcam/tags/` | tags.db (tags, reviews, people, exclusion zones), wildlife.db (the sighting log), reference_frames.json | **highest** — irreplaceable human data |
 | `~/trailcam/models/` | detector weights | none — re-downloadable |
 
 Detector weights are staged into `models/` deliberately: MegaDetector otherwise downloads to
@@ -145,13 +207,18 @@ trigger a silent 281 MB re-download.
 
 ## Environments
 
-Three venvs, because speciesnet and megadetector cannot coexist:
+Separate venvs, because speciesnet and megadetector cannot coexist (see `docs/ENVIRONMENTS.md`):
 
 | venv | Contents | protobuf |
 |---|---|---|
-| `.venv` | the `hoseid` package, CLI, tests | — |
+| `.venv` | the `hoseid` package, CLI, nightly scripts, wildlife MCP (`.[mcp]`) | — |
 | `.venv-detector` | megadetector 10.0.24 | 3.20.1 (pinned by ultralytics-yolov5) |
-| `.venv-classifier` | speciesnet 5.0.5 | 7.35.1 |
+| `.venv-classifier` | speciesnet 5.0.5; also `stages/sex.py` and `training/sex` | 7.35.1 |
+| `.venv-fetch` | requests + pyaarlo, the fetch daemon | — |
+| `~/venvs/megadetector` | outside the repo: the review app, and the full test suite | — |
+
+Tests: `~/venvs/megadetector/bin/python -m pytest -q -rs` from the repo root (the two wildlife
+MCP test files skip there; run them with `.venv/bin/python -m pytest -q tests/test_mcp_wildlife*.py`).
 
 `hoseid run` invokes each stage as a subprocess in its own interpreter. The stages communicate
 through the filesystem and the detections database, never by importing each other.
@@ -160,6 +227,11 @@ through the filesystem and the detections database, never by importing each othe
 
 - `docs/INVARIANTS.md` — the locked design invariants, where each is enforced and tested
 - `docs/EVAL_MOUNTAIN_LION.md` — end-to-end lion test (97.8% sequence-level detector recall)
+- `docs/CAMERA_RENAMES.md` — runbook for a camera rename or move
+- `docs/ENVIRONMENTS.md` — why the venvs are split and how to recreate them
+- `src/hoseid/mcp_wildlife/README.md` — the wildlife MCP server
+- `training/sex/README.md` — the buck/doe model
+- `AGENTS.md` — notes for coding agents (test pattern, restarts, contracts)
 
 ## Status
 
@@ -167,6 +239,7 @@ Built against ENA24 and Caltech Camera Traps. **Re-validate when P's real Reveal
 empty-frame rate, blacktail accuracy, bear colour phase in IR, and this property's actual
 illuminators and camera angles are all still unmeasured.
 
-Not built yet, by design: the Reveal and Arlo fetch modules (deferred until the sidecar contract
-is settled against a real sample) and the review UI (highest-leverage remaining component; the
-tag store and crop addressing exist so it can be dropped in).
+The fetch modules (`fetchers/`), the review UI (`app.py`), the wildlife log sync and the
+wildlife MCP have since been built and run as the services above. Parked: automatic person ID
+(`training/person/`, 2026-10-26 — best balanced accuracy 0.44 on held-out days against chance
+0.17).

@@ -7,6 +7,12 @@
 > kept as an alias), `detections.db`, and hosemap layers, then posts a note to the shared
 > Logbook. A rename onto a name another camera already uses is refused and alerted. Still by
 > hand: Sage's station note (below) and prose in the log. Reveal cameras still use this runbook.
+>
+> **Two cameras, one name (2026-11-09).** The Arlo camera `Cabin - Bench` is station
+> `Bench (Arlo)`; the Reveal camera labelled `Bench` keeps station `Bench`. The prefix strip
+> would have merged them, so `Cabin - Bench` has a `special` entry in
+> `config/station_renames.json` with `before` = `after` = `Bench (Arlo)`. Do the same for any
+> future Arlo camera whose stripped name collides with a Reveal station.
 
 P renames cameras in the vendor app (Reveal / Arlo) when he moves them. The vendor label *is*
 the station name, but it reaches the system through several layers that do not update
@@ -24,6 +30,7 @@ CB5–CB8 → Enchanted Forest / Cliffside / Trailer Path / North Entry).
 | log sync + security view mapping | `config/station_renames.json` (read by `scripts/sync_wildlife_log.py` and hoseserv's security view). The sync resolves camera **serials** to stations from `stations.json` itself (`hoseid.stations.by_device`), so there is no hand-copied device map to edit | yes — add a line to the JSON per rename |
 | the wildlife log | `~/trailcam/tags/wildlife.db` `sightings.station`, `stations` table | yes — see SQL below; keep the old name as an alias |
 | encounters (derived) | `~/trailcam/derived/encounters.db` | rebuild (`scripts/build_encounters.py --gap-min 90`; nightly does it too) |
+| Reveal battery / signal | `~/trailcam/landing/station_health.json`, `station_health_history.jsonl` | no — `fetchers/reveal.py` names each reading like a capture: the serial's station override first, then the rename rules (so Reveal label `North Entrance` reports as `North Entry`). Without an override for the serial it falls back to the renamed vendor label |
 | Sage's station note | `~/sage/memory/trailcam-stations-and-cameras.md` | yes — Sage answers "which camera is which" from it |
 | prose in the log (claims, open items, sighting notes, individuals) | wildlife.db text columns | leave — they are history; the alias makes the old name resolvable in the MCP |
 
@@ -74,7 +81,8 @@ row as `unmapped`. Use that as the check that nothing was missed.
 9. **Verify** through the MCP (or `hoseid.mcp_wildlife.queries` directly):
    `get_stations()["unmapped_stations"]` should list nothing new, and
    `query_sightings(station='OLD')` should report `filters_applied.station == ['NEW']`.
-10. Run `.venv/bin/pytest -q`. Nothing to restart: the MCP opens the DB per call, and the
+10. Run `~/venvs/megadetector/bin/python -m pytest -q -rs` (`.venv` alone cannot collect the
+    suite; see AGENTS.md). Nothing to restart: the MCP opens the DB per call, and the
     nightly sync picks up the mapping on its next run, and the security view rereads the JSON
     when its mtime changes. The review app (8870) shows whatever
     `captures.station` says for old rows; that is cosmetic and regenerable.
