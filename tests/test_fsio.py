@@ -51,10 +51,27 @@ def test_failure_reraises_cleans_up_and_keeps_old(tmp_path, monkeypatch, exc):
 
 
 def test_mode_applied(tmp_path):
-    fsio.atomic_write_text(tmp_path / "shared", "x", mode=0o644)
-    fsio.atomic_write_text(tmp_path / "private", "x")
-    assert stat.S_IMODE(os.stat(tmp_path / "shared").st_mode) == 0o644
-    assert stat.S_IMODE(os.stat(tmp_path / "private").st_mode) == 0o600
+    """Without a mode the default matches a plain write: a new file is 0644
+    (so a file another process reads stays world-readable), an existing file
+    keeps its mode, and an explicit mode still wins."""
+    fsio.atomic_write_text(tmp_path / "new", "x")
+    fsio.atomic_write_text(tmp_path / "kept", "x")
+    os.chmod(tmp_path / "kept", 0o640)
+    fsio.atomic_write_text(tmp_path / "kept", "y")
+    fsio.atomic_write_text(tmp_path / "explicit", "x", mode=0o600)
+    assert stat.S_IMODE(os.stat(tmp_path / "new").st_mode) == 0o644
+    assert stat.S_IMODE(os.stat(tmp_path / "kept").st_mode) == 0o640
+    assert stat.S_IMODE(os.stat(tmp_path / "explicit").st_mode) == 0o600
+
+
+def test_private_file_stays_0600(tmp_path):
+    """A file that must stay private: an explicit mode=0o600 is kept, and a
+    rewrite does not fall back to the 0644 default."""
+    fsio.atomic_write_text(tmp_path / "keys.json", "{}", mode=0o600)
+    assert stat.S_IMODE(os.stat(tmp_path / "keys.json").st_mode) == 0o600
+    fsio.atomic_write_text(tmp_path / "keys.json", "{}", mode=0o600)
+    assert stat.S_IMODE(os.stat(tmp_path / "keys.json").st_mode) == 0o600
+    assert [p.name for p in tmp_path.iterdir()] == ["keys.json"]
 
 
 def test_state_set_round_trips(tmp_path):

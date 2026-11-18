@@ -6,8 +6,11 @@ failure the temp file is removed and the error re-raised, and an existing
 destination is left untouched. Temp names start with ".tmp-", which landing's
 directory scans skip.
 
-mkstemp creates files 0600. Pass `mode` when another user or service reads
-the result (hoseserv reads the station-health files, for example).
+mkstemp creates files 0600. Without an explicit `mode` the writer keeps the
+destination's existing mode, or 0644 for a new file, like hoseserv's
+_atomic_write and hoselm's atomic_write (sagecode's test_helper_copies.py
+checks all three), so the camera_names files hoseserv and hoseint read stay
+readable. Pass `mode` to override it, e.g. mode=0o600 for a private file.
 
 The read-only opener (connect_ro) is here next to the atomic-write helper
 rather than in hoseid.paths: paths lives alongside the pipeline stages, and a
@@ -30,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 import tempfile
 from pathlib import Path
 
@@ -43,8 +47,10 @@ def atomic_write_bytes(dest: Path, data: bytes, mode: int | None = None) -> None
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        if mode is not None:
-            os.chmod(tmp, mode)
+        # mkstemp's 0600 would otherwise replace the destination's mode.
+        if mode is None:
+            mode = stat.S_IMODE(dest.stat().st_mode) if dest.exists() else 0o644
+        os.chmod(tmp, mode)
         os.replace(tmp, dest)          # atomic within a filesystem
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
